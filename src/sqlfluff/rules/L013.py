@@ -88,10 +88,7 @@ class Rule_L013(BaseRule):
             elements = immediate_parent.children(sp.is_type("select_clause_element"))
             num_elements = len(elements)
 
-            if num_elements > 1:
-                return LintResult(anchor=context.segment)
-            return None
-
+            return LintResult(anchor=context.segment) if num_elements > 1 else None
         return LintResult(anchor=context.segment)
 
 

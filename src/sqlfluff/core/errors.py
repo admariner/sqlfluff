@@ -66,10 +66,7 @@ class SQLBaseError(ValueError):
         if len(self.args) > 1 and isinstance(self.args, str):  # pragma: no cover TODO?
             return self.args
 
-        if len(self.args) == 1:
-            return self.args[0]
-
-        return self.__class__.__name__  # pragma: no cover
+        return self.args[0] if len(self.args) == 1 else self.__class__.__name__
 
     def get_info_dict(self):
         """Return a dict of properties.
@@ -178,9 +175,7 @@ class SQLLintError(SQLBaseError):
     @property
     def fixable(self):
         """Should this error be considered fixable?"""
-        if self.fixes:
-            return True
-        return False
+        return bool(self.fixes)
 
     def check_tuple(self) -> CheckTuple:
         """Get a tuple representing this error. Mostly for testing."""

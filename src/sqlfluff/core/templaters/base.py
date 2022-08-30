@@ -157,7 +157,7 @@ class TemplatedFile:
             # Sanity check raw string and slices.
             pos = 0
             rfs: RawFileSlice
-            for idx, rfs in enumerate(self.raw_sliced):
+            for rfs in self.raw_sliced:
                 assert rfs.source_idx == pos
                 pos += len(rfs.raw)
             assert pos == len(self.source_str)
@@ -165,7 +165,7 @@ class TemplatedFile:
             # Sanity check templated string and slices.
             previous_slice = None
             tfs: Optional[TemplatedFileSlice] = None
-            for idx, tfs in enumerate(self.sliced_file):
+            for tfs in self.sliced_file:
                 if previous_slice:
                     if tfs.templated_slice.start != previous_slice.templated_slice.stop:
                         raise SQLFluffSkipFile(  # pragma: no cover
@@ -177,19 +177,21 @@ class TemplatedFile:
                             f"{self.templated_str[previous_slice.templated_slice]!r}"
                             ")"
                         )
-                else:
-                    if tfs.templated_slice.start != 0:
-                        raise SQLFluffSkipFile(  # pragma: no cover
-                            "First Templated slice not started at index 0 "
-                            f"(found slice {tfs.templated_slice})"
-                        )
-                previous_slice = tfs
-            if self.sliced_file and templated_str is not None:
-                if tfs.templated_slice.stop != len(templated_str):
+                elif tfs.templated_slice.start != 0:
                     raise SQLFluffSkipFile(  # pragma: no cover
-                        "Length of templated file mismatch with final slice: "
-                        f"{len(templated_str)} != {tfs.templated_slice.stop}."
+                        "First Templated slice not started at index 0 "
+                        f"(found slice {tfs.templated_slice})"
                     )
+                previous_slice = tfs
+            if (
+                self.sliced_file
+                and templated_str is not None
+                and tfs.templated_slice.stop != len(templated_str)
+            ):
+                raise SQLFluffSkipFile(  # pragma: no cover
+                    "Length of templated file mismatch with final slice: "
+                    f"{len(templated_str)} != {tfs.templated_slice.stop}."
+                )
 
     @classmethod
     def from_string(cls, raw):
@@ -221,11 +223,7 @@ class TemplatedFile:
             line_number, line_position
 
         """
-        if source:
-            ref_str = self._source_newlines
-        else:
-            ref_str = self._templated_newlines
-
+        ref_str = self._source_newlines if source else self._templated_newlines
         nl_idx = bisect_left(ref_str, char_pos)
 
         if nl_idx > 0:
@@ -320,25 +318,21 @@ class TemplatedFile:
 
         # Zero length slice.
         if template_slice.start == template_slice.stop:
-            # Is it on a join?
             if insertion_point >= 0:
                 return slice(insertion_point, insertion_point)
-            # It's within a segment.
-            else:
-                if (
-                    ts_start_subsliced_file
-                    and ts_start_subsliced_file[0][0] == "literal"
-                ):
-                    offset = template_slice.start - ts_start_subsliced_file[0][2].start
-                    return slice(
-                        ts_start_subsliced_file[0][1].start + offset,
-                        ts_start_subsliced_file[0][1].start + offset,
-                    )
-                else:
-                    raise ValueError(  # pragma: no cover
-                        "Attempting a single length slice within a templated section!"
-                    )
+            if (
+                not ts_start_subsliced_file
+                or ts_start_subsliced_file[0][0] != "literal"
+            ):
+                raise ValueError(  # pragma: no cover
+                    "Attempting a single length slice within a templated section!"
+                )
 
+            offset = template_slice.start - ts_start_subsliced_file[0][2].start
+            return slice(
+                ts_start_subsliced_file[0][1].start + offset,
+                ts_start_subsliced_file[0][1].start + offset,
+            )
         # Otherwise it's a slice with length.
 
         # Use a non inclusive match to get the end point.
@@ -438,11 +432,7 @@ class TemplatedFile:
 
         The results are NECESSARILY sorted.
         """
-        ret_buff = []
-        for elem in self.raw_sliced:
-            if elem.is_source_only_slice():
-                ret_buff.append(elem)
-        return ret_buff
+        return [elem for elem in self.raw_sliced if elem.is_source_only_slice()]
 
 
 class RawTemplater:

@@ -88,20 +88,19 @@ def benchmark(cmd, runs, from_file):
             process = subprocess.run(benchmark["cmd"])
             click.echo("===END PROCESS OUTPUT===")
             t1 = time.monotonic()
-            if process.returncode != 0:
-                if benchmark["cmd"][0] == "sqlfluff" and benchmark["cmd"][1] == "fix":
-                    # Allow fix to fail as not all our benchmark errors are fixable
-                    click.echo(
-                        f"Fix command failed with return code: {process.returncode}"
-                    )
-                else:
-                    click.echo(f"Command failed with return code: {process.returncode}")
-                    sys.exit(process.returncode)
-            else:
+            if process.returncode == 0:
                 duration = t1 - t0
                 click.echo(f"Process completed in {duration:.4f}s")
                 results[benchmark["name"]] = duration
 
+            elif benchmark["cmd"][0] == "sqlfluff" and benchmark["cmd"][1] == "fix":
+                # Allow fix to fail as not all our benchmark errors are fixable
+                click.echo(
+                    f"Fix command failed with return code: {process.returncode}"
+                )
+            else:
+                click.echo(f"Command failed with return code: {process.returncode}")
+                sys.exit(process.returncode)
         if post_results:
             click.echo(f"Posting results: {results}")
             api_key = os.environ["SQLFLUFF_BENCHMARK_API_KEY"]
@@ -119,8 +118,8 @@ def benchmark(cmd, runs, from_file):
             click.echo(resp.text)
         all_results[run_no] = results
     click.echo("===== Done =====")
-    for run_no in all_results:
-        click.echo("Run {:>5}: {}".format(f"#{run_no}", all_results[run_no]))
+    for run_no, value in all_results.items():
+        click.echo("Run {:>5}: {}".format(f"#{run_no}", value))
 
 
 @cli.command()
@@ -134,12 +133,7 @@ def prepare_release(new_version_num):
     )
     releases = api.repos.list_releases()
 
-    latest_draft_release = None
-    for rel in releases:
-        if rel["draft"]:
-            latest_draft_release = rel
-            break
-
+    latest_draft_release = next((rel for rel in releases if rel["draft"]), None)
     if not latest_draft_release:
         raise ValueError("No draft release found!")
 
@@ -174,109 +168,108 @@ def prepare_release(new_version_num):
             deduped_potential_new_contributors.append(c)
 
     input_changelog = open("CHANGELOG.md", encoding="utf8").readlines()
-    write_changelog = open("CHANGELOG.md", "w", encoding="utf8")
-    for i, line in enumerate(input_changelog):
-        write_changelog.write(line)
-        if "DO NOT DELETE THIS LINE" in line:
-            existing_entry_start = i + 2
-            # If the release is already in the changelog, update it
-            if f"## [{new_version_num}]" in input_changelog[existing_entry_start]:
-                input_changelog[
-                    existing_entry_start
-                ] = f"## [{new_version_num}] - {time.strftime('%Y-%m-%d')}\n"
-
-                # Delete the existing What’s Changed and New Contributors sections
-                remaining_changelog = input_changelog[existing_entry_start:]
-                existing_whats_changed_start = (
-                    next(
-                        j
-                        for j, line in enumerate(remaining_changelog)
-                        if line.startswith("## What’s Changed")
-                    )
-                    + existing_entry_start
-                )
-                existing_new_contributors_start = (
-                    next(
-                        j
-                        for j, line in enumerate(remaining_changelog)
-                        if line.startswith("## New Contributors")
-                    )
-                    + existing_entry_start
-                )
-                existing_new_contributors_length = (
-                    next(
-                        j
-                        for j, line in enumerate(
-                            input_changelog[existing_new_contributors_start:]
-                        )
-                        if line.startswith("## [")
-                    )
-                    - 1
-                )
-
-                del input_changelog[
-                    existing_whats_changed_start : existing_new_contributors_start
-                    + existing_new_contributors_length
-                ]
-
+    with open("CHANGELOG.md", "w", encoding="utf8") as write_changelog:
+        for i, line in enumerate(input_changelog):
+            write_changelog.write(line)
+            if "DO NOT DELETE THIS LINE" in line:
+                existing_entry_start = i + 2
                 # Now that we've cleared the previous sections, we will accurately
                 # find if contributors have been previously mentioned in the changelog
                 new_contributor_lines = []
-                input_changelog_str = "".join(
-                    input_changelog[existing_whats_changed_start:]
-                )
-                for c in deduped_potential_new_contributors:
-                    if c["name"] not in input_changelog_str:
-                        new_contributor_lines.append(c["line"])
-                input_changelog[existing_whats_changed_start] = (
-                    whats_changed_text
-                    + "\n\n## New Contributors\n"
-                    + "\n".join(new_contributor_lines)
-                    + "\n\n"
-                )
+                            # If the release is already in the changelog, update it
+                if f"## [{new_version_num}]" in input_changelog[existing_entry_start]:
+                    input_changelog[
+                        existing_entry_start
+                    ] = f"## [{new_version_num}] - {time.strftime('%Y-%m-%d')}\n"
 
-            else:
-                write_changelog.write(
-                    f"\n## [{new_version_num}] - {time.strftime('%Y-%m-%d')}\n\n## Highlights\n\n"  # noqa E501
-                )
-                write_changelog.write(whats_changed_text)
-                write_changelog.write("\n## New Contributors\n\n")
-                # Ensure contributor names don't appear in input_changelog list
-                new_contributor_lines = []
-                input_changelog_str = "".join(input_changelog)
-                for c in deduped_potential_new_contributors:
-                    if c["name"] not in input_changelog_str:
-                        new_contributor_lines.append(c["line"])
-                write_changelog.write("\n".join(new_contributor_lines))
-                write_changelog.write("\n")
+                    # Delete the existing What’s Changed and New Contributors sections
+                    remaining_changelog = input_changelog[existing_entry_start:]
+                    existing_whats_changed_start = (
+                        next(
+                            j
+                            for j, line in enumerate(remaining_changelog)
+                            if line.startswith("## What’s Changed")
+                        )
+                        + existing_entry_start
+                    )
+                    existing_new_contributors_start = (
+                        next(
+                            j
+                            for j, line in enumerate(remaining_changelog)
+                            if line.startswith("## New Contributors")
+                        )
+                        + existing_entry_start
+                    )
+                    existing_new_contributors_length = (
+                        next(
+                            j
+                            for j, line in enumerate(
+                                input_changelog[existing_new_contributors_start:]
+                            )
+                            if line.startswith("## [")
+                        )
+                        - 1
+                    )
 
-    write_changelog.close()
+                    del input_changelog[
+                        existing_whats_changed_start : existing_new_contributors_start
+                        + existing_new_contributors_length
+                    ]
+
+                    input_changelog_str = "".join(
+                        input_changelog[existing_whats_changed_start:]
+                    )
+                    new_contributor_lines.extend(
+                        c["line"]
+                        for c in deduped_potential_new_contributors
+                        if c["name"] not in input_changelog_str
+                    )
+
+                    input_changelog[existing_whats_changed_start] = (
+                        whats_changed_text
+                        + "\n\n## New Contributors\n"
+                        + "\n".join(new_contributor_lines)
+                        + "\n\n"
+                    )
+
+                else:
+                    write_changelog.write(
+                        f"\n## [{new_version_num}] - {time.strftime('%Y-%m-%d')}\n\n## Highlights\n\n"  # noqa E501
+                    )
+                    write_changelog.write(whats_changed_text)
+                    write_changelog.write("\n## New Contributors\n\n")
+                    input_changelog_str = "".join(input_changelog)
+                    new_contributor_lines.extend(
+                        c["line"]
+                        for c in deduped_potential_new_contributors
+                        if c["name"] not in input_changelog_str
+                    )
+
+                    write_changelog.write("\n".join(new_contributor_lines))
+                    write_changelog.write("\n")
 
     for filename in ["setup.cfg", "plugins/sqlfluff-templater-dbt/setup.cfg"]:
         input_file = open(filename, "r").readlines()
-        write_file = open(filename, "w")
-        for line in input_file:
-            for key in ["stable_version", "version"]:
-                if line.startswith(key):
-                    line = f"{key} = {new_version_num}\n"
-                    break
-            if line.startswith("    sqlfluff=="):
-                line = f"    sqlfluff=={new_version_num}\n"
-            write_file.write(line)
-        write_file.close()
-
+        with open(filename, "w") as write_file:
+            for line in input_file:
+                for key in ["stable_version", "version"]:
+                    if line.startswith(key):
+                        line = f"{key} = {new_version_num}\n"
+                        break
+                if line.startswith("    sqlfluff=="):
+                    line = f"    sqlfluff=={new_version_num}\n"
+                write_file.write(line)
     for filename in ["docs/source/gettingstarted.rst"]:
         input_file = open(filename, "r").readlines()
-        write_file = open(filename, "w")
-        change_next_line = False
-        for line in input_file:
-            if change_next_line:
-                line = f"    {new_version_num}\n"
-                change_next_line = False
-            elif line.startswith("    $ sqlfluff version"):
-                change_next_line = True
-            write_file.write(line)
-        write_file.close()
+        with open(filename, "w") as write_file:
+            change_next_line = False
+            for line in input_file:
+                if change_next_line:
+                    line = f"    {new_version_num}\n"
+                    change_next_line = False
+                elif line.startswith("    $ sqlfluff version"):
+                    change_next_line = True
+                write_file.write(line)
 
 
 if __name__ == "__main__":

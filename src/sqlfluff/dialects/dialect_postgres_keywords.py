@@ -24,7 +24,7 @@ def priority_keyword_merge(*args):
 
     while len(keyword_lists) > 1:
         base_list, priority_list = keyword_lists[0], keyword_lists[1]
-        keyword_set = set([x[0] for x in base_list])
+        keyword_set = {x[0] for x in base_list}
         for item in priority_list:
             if item[0] in keyword_set:
                 for index, keyword in enumerate(base_list):
@@ -43,9 +43,7 @@ def get_keywords(keyword_list, keyword_type):
 
     keyword_type should be one of "not-keyword", "reserved", "non-reserved"
     """
-    keywords = [x[0] for x in keyword_list if x[1].startswith(keyword_type)]
-
-    return keywords
+    return [x[0] for x in keyword_list if x[1].startswith(keyword_type)]
 
 
 postgres_docs_keywords = [

@@ -88,12 +88,9 @@ class Rule_L026(BaseRule):
             dml_target_table: Optional[Tuple[str, ...]] = None
             self.logger.debug("Trigger on: %s", context.segment)
             if not context.segment.is_type("select_statement"):
-                # Extract first table reference. This will be the target
-                # table in a DML statement.
-                table_reference = next(
+                if table_reference := next(
                     context.segment.recursive_crawl("table_reference"), None
-                )
-                if table_reference:
+                ):
                     dml_target_table = self._table_ref_as_tuple(table_reference)
 
             self.logger.debug("DML Reference Table: %s", dml_target_table)
@@ -102,8 +99,7 @@ class Rule_L026(BaseRule):
             crawler = SelectCrawler(
                 context.segment, context.dialect, query_class=L026Query
             )
-            query: L026Query = cast(L026Query, crawler.query_tree)
-            if query:
+            if query := cast(L026Query, crawler.query_tree):
                 self._analyze_table_references(
                     query, dml_target_table, context.dialect, violations
                 )
@@ -150,11 +146,12 @@ class Rule_L026(BaseRule):
                 # in an ancestor query).
                 for r in select_info.reference_buffer:
                     if not self._should_ignore_reference(r, selectable):
-                        # This function walks up the query's parent stack if necessary.
-                        violation = self._resolve_reference(
-                            r, self._get_table_refs(r, dialect), dml_target_table, query
-                        )
-                        if violation:
+                        if violation := self._resolve_reference(
+                            r,
+                            self._get_table_refs(r, dialect),
+                            dml_target_table,
+                            query,
+                        ):
                             violations.append(violation)
 
         # Visit children.
@@ -165,13 +162,7 @@ class Rule_L026(BaseRule):
 
     @staticmethod
     def _should_ignore_reference(reference, selectable):
-        ref_path = selectable.selectable.path_to(reference)
-        # Ignore references occurring in an "INTO" clause:
-        # - They are table references, not column references.
-        # - They are the target table, similar to an INSERT or UPDATE
-        #   statement, thus not expected to match a table in the FROM
-        #   clause.
-        if ref_path:
+        if ref_path := selectable.selectable.path_to(reference):
             return any(seg.is_type("into_table_clause") for seg in ref_path)
         else:
             return False  # pragma: no cover
@@ -179,15 +170,16 @@ class Rule_L026(BaseRule):
     @staticmethod
     def _get_table_refs(ref, dialect):
         """Given ObjectReferenceSegment, determine possible table references."""
-        tbl_refs = []
-        # First, handle any schema.table references.
-        for sr, tr in ref.extract_possible_multipart_references(
-            levels=[
-                ref.ObjectReferenceLevel.SCHEMA,
-                ref.ObjectReferenceLevel.TABLE,
-            ]
-        ):
-            tbl_refs.append((tr, (sr.part, tr.part)))
+        tbl_refs = [
+            (tr, (sr.part, tr.part))
+            for sr, tr in ref.extract_possible_multipart_references(
+                levels=[
+                    ref.ObjectReferenceLevel.SCHEMA,
+                    ref.ObjectReferenceLevel.TABLE,
+                ]
+            )
+        ]
+
         # Maybe check for simple table references. Two cases:
         # - For most dialects, skip this if it's a schema+table reference -- the
         #   reference was specific, so we shouldn't ignore that by looking
@@ -200,10 +192,13 @@ class Rule_L026(BaseRule):
         #   whether the dialect overrides
         #   ObjectReferenceSegment.extract_possible_references().
         if not tbl_refs or dialect.name in ["bigquery"]:
-            for tr in ref.extract_possible_references(
-                level=ref.ObjectReferenceLevel.TABLE
-            ):
-                tbl_refs.append((tr, (tr.part,)))
+            tbl_refs.extend(
+                (tr, (tr.part,))
+                for tr in ref.extract_possible_references(
+                    level=ref.ObjectReferenceLevel.TABLE
+                )
+            )
+
         return tbl_refs
 
     def _resolve_reference(

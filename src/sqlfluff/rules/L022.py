@@ -55,17 +55,14 @@ class Rule_L022(BaseRule):
 
         error_buffer = []
         assert context.segment.is_type("with_compound_statement")
-        # First we need to find all the commas, the end brackets, the
-        # things that come after that and the blank lines in between.
-
-        # Find all the closing brackets. They are our anchor points.
-        bracket_indices = []
         expanded_segments = list(
             context.segment.iter_segments(expanding=["common_table_expression"])
         )
-        for idx, seg in enumerate(expanded_segments):
-            if seg.is_type("bracketed"):
-                bracket_indices.append(idx)
+        bracket_indices = [
+            idx
+            for idx, seg in enumerate(expanded_segments)
+            if seg.is_type("bracketed")
+        ]
 
         # Work through each point and deal with it individually
         for bracket_idx in bracket_indices:

@@ -96,37 +96,33 @@ class Sequence(BaseGrammar):
                     break
 
                 if len(pre_nc + mid_seg + post_nc) == 0:
-                    # We've run our of sequence without matching everything.
-                    # Do only optional or meta elements remain?
-                    if all(
+                    if not all(
                         e.is_optional() or e.is_meta or isinstance(e, Conditional)
                         for e in self._elements[idx:]
                     ):
+                        # we've got to the end of the sequence without matching all
+                        # required elements.
+                        return MatchResult.from_unmatched(segments)
                         # then it's ok, and we can return what we've got so far.
                         # No need to deal with anything left over because we're at the
                         # end, unless it's a meta segment.
 
                         # We'll add those meta segments after any existing ones. So
                         # the go on the meta_post_nc stack.
-                        for e in self._elements[idx:]:
-                            # If it's meta, instantiate it.
-                            if e.is_meta:
-                                meta_post_nc += (e(),)  # pragma: no cover TODO?
+                    for e in self._elements[idx:]:
+                        # If it's meta, instantiate it.
+                        if e.is_meta:
+                            meta_post_nc += (e(),)  # pragma: no cover TODO?
                             # If it's conditional and it's enabled, match it.
-                            if isinstance(e, Conditional) and e.is_enabled(
+                        if isinstance(e, Conditional) and e.is_enabled(
                                 parse_context
                             ):
-                                meta_match = e.match(tuple(), parse_context)
-                                if meta_match:
-                                    meta_post_nc += meta_match.matched_segments
+                            if meta_match := e.match(tuple(), parse_context):
+                                meta_post_nc += meta_match.matched_segments
 
-                        # Early break to exit via the happy match path.
-                        early_break = True
-                        break
-                    else:
-                        # we've got to the end of the sequence without matching all
-                        # required elements.
-                        return MatchResult.from_unmatched(segments)
+                    # Early break to exit via the happy match path.
+                    early_break = True
+                    break
                 else:
                     # We've already dealt with potential whitespace above, so carry on
                     # to matching
@@ -345,45 +341,44 @@ class Bracketed(Sequence):
         with parse_context.deeper_match() as ctx:
             content_match = super().match(content_segs, parse_context=ctx)
 
-        # We require a complete match for the content (hopefully for obvious reasons)
-        if content_match.is_complete():
-            # Reconstruct the bracket segment post match.
-            # We need to realign the meta segments so the pos markers are correct.
-            # Have we already got indents?
-            meta_idx = None
-            for idx, seg in enumerate(bracket_segment.segments):
+        if not content_match.is_complete():
+            return MatchResult.from_unmatched(segments)
+        meta_idx = next(
+            (
+                idx
+                for idx, seg in enumerate(bracket_segment.segments)
                 if (
                     seg.is_meta
                     and cast(MetaSegment, seg).indent_val > 0
                     and not cast(MetaSegment, seg).is_template
-                ):
-                    meta_idx = idx
-                    break
+                )
+            ),
+            None,
+        )
+
             # If we've already got indents, don't add more.
-            if meta_idx:
-                bracket_segment.segments = BaseSegment._position_segments(
-                    bracket_segment.start_bracket
-                    + pre_segs
-                    + content_match.all_segments()
-                    + post_segs
-                    + bracket_segment.end_bracket
-                )
-            # Append some indent and dedent tokens at the start and the end.
-            else:
-                bracket_segment.segments = BaseSegment._position_segments(
-                    # NB: The nc segments go *outside* the indents.
-                    bracket_segment.start_bracket
-                    + (Indent(),)  # Add a meta indent here
-                    + pre_segs
-                    + content_match.all_segments()
-                    + post_segs
-                    + (Dedent(),)  # Add a meta indent here
-                    + bracket_segment.end_bracket
-                )
-            return MatchResult(
-                (bracket_segment,) if bracket_persists else bracket_segment.segments,
-                trailing_segments,
+        bracket_segment.segments = (
+            BaseSegment._position_segments(
+                bracket_segment.start_bracket
+                + pre_segs
+                + content_match.all_segments()
+                + post_segs
+                + bracket_segment.end_bracket
             )
-        # No complete match. Fail.
-        else:
-            return MatchResult.from_unmatched(segments)
+            if meta_idx
+            else BaseSegment._position_segments(
+                # NB: The nc segments go *outside* the indents.
+                bracket_segment.start_bracket
+                + (Indent(),)  # Add a meta indent here
+                + pre_segs
+                + content_match.all_segments()
+                + post_segs
+                + (Dedent(),)  # Add a meta indent here
+                + bracket_segment.end_bracket
+            )
+        )
+
+        return MatchResult(
+            (bracket_segment,) if bracket_persists else bracket_segment.segments,
+            trailing_segments,
+        )

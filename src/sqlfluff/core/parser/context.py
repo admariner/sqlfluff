@@ -191,10 +191,10 @@ class ParseDenylist:
         Has this seg_tuple already been matched
         unsuccessfully against this segment name.
         """
-        if seg_name in self._denylist_struct:  # pragma: no cover TODO?
-            if seg_tuple in self._denylist_struct[seg_name]:
-                return True
-        return False
+        return (
+            seg_name in self._denylist_struct
+            and seg_tuple in self._denylist_struct[seg_name]
+        )
 
     def mark(self, seg_name, seg_tuple):
         """Mark this seg_tuple as not a match with this seg_name."""

@@ -102,17 +102,16 @@ class JinjaTracer:
             alt_id, content_info, literal = value
             target_slice_idx = self.find_slice_index(alt_id)
             slice_length = content_info if literal else len(str(content_info))
-            target_inside_block = self.raw_slice_info[
+            if target_inside_block := self.raw_slice_info[
                 self.raw_sliced[target_slice_idx]
-            ].inside_block
-            if not target_inside_block:
-                # Normal case: Walk through the template.
-                self.move_to_slice(target_slice_idx, slice_length)
-            else:
+            ].inside_block:
                 # {% block %} executes code elsewhere in the template but does
                 # not move there. It's a bit like macro invocation.
                 self.record_trace(slice_length, target_slice_idx)
 
+            else:
+                # Normal case: Walk through the template.
+                self.move_to_slice(target_slice_idx, slice_length)
         # TRICKY: The 'append_to_templated' parameter is only used by the dbt
         # templater, passing "\n" for this parameter if we need to add one back.
         # (The Jinja templater does not pass this parameter, so
@@ -273,22 +272,21 @@ class JinjaAnalyzer:
                 )
             except TemplateSyntaxError as e:
                 if (
-                    isinstance(e.message, str)
-                    and "Unexpected end of template" in e.message
+                    not isinstance(e.message, str)
+                    or "Unexpected end of template" not in e.message
                 ):
-                    # It was opening a block, thus we're inside a set, macro, or
-                    # block.
-                    if trimmed_parts[0] == "block":
-                        self.inside_block = True
-                    else:
-                        result = None
-                        if trimmed_parts[0] == "call":
-                            assert m_open and m_close
-                            result = self.track_call(m_open, m_close, tag_contents)
-                        self.inside_set_macro_or_call = True
-                        return result
-                else:
                     raise  # pragma: no cover
+                # It was opening a block, thus we're inside a set, macro, or
+                # block.
+                if trimmed_parts[0] == "block":
+                    self.inside_block = True
+                else:
+                    result = None
+                    if trimmed_parts[0] == "call":
+                        assert m_open and m_close
+                        result = self.track_call(m_open, m_close, tag_contents)
+                    self.inside_set_macro_or_call = True
+                    return result
         elif block_type == "block_end":
             if trimmed_parts[0] in ("endcall", "endmacro", "endset"):
                 # Exiting a set or macro or block.
@@ -305,10 +303,13 @@ class JinjaAnalyzer:
         inside_block: bool = False,
     ) -> RawSliceInfo:
         """Create RawSliceInfo as given, or "empty" if in set/macro block."""
-        if not self.inside_set_macro_or_call:
-            return RawSliceInfo(unique_alternate_id, alternate_code, [], inside_block)
-        else:
-            return RawSliceInfo(None, None, [], False)
+        return (
+            RawSliceInfo(None, None, [], False)
+            if self.inside_set_macro_or_call
+            else RawSliceInfo(
+                unique_alternate_id, alternate_code, [], inside_block
+            )
+        )
 
     # We decide the "kind" of element we're dealing with using its _closing_
     # tag rather than its opening tag. The types here map back to similar types

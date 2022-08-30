@@ -66,16 +66,16 @@ class Rule_L006(BaseRule):
             return False
         # And it's not an opening/closing bracket
         seg_type = seg.get_type()
-        if seg_type.endswith("_bracket"):
-            if seg_type.startswith("start_" if before else "end_"):
-                return False
+        if seg_type.endswith("_bracket") and seg_type.startswith(
+            "start_" if before else "end_"
+        ):
+            return False
         if seg.is_meta:  # pragma: no cover
             if before:
                 if seg.source_str.endswith(" ") or seg.source_str.endswith("\n"):
                     return False
-            else:
-                if seg.source_str.startswith(" ") or seg.source_str.startswith("\n"):
-                    return False
+            elif seg.source_str.startswith(" ") or seg.source_str.startswith("\n"):
+                return False
         return True
 
     @staticmethod
@@ -171,9 +171,7 @@ class Rule_L006(BaseRule):
                     violations.append(
                         LintResult(
                             anchor=before_anchor,
-                            description="Missing whitespace before {}".format(
-                                before_anchor.raw
-                            ),
+                            description=f"Missing whitespace before {before_anchor.raw}",
                             fixes=[
                                 LintFix.create_before(
                                     # NB the anchor here is always in the parent and not
@@ -184,6 +182,7 @@ class Rule_L006(BaseRule):
                             ],
                         )
                     )
+
 
             if check_after:
                 next_seg = self._find_segment(
@@ -198,9 +197,7 @@ class Rule_L006(BaseRule):
                     violations.append(
                         LintResult(
                             anchor=after_anchor,
-                            description="Missing whitespace after {}".format(
-                                after_anchor.raw
-                            ),
+                            description=f"Missing whitespace after {after_anchor.raw}",
                             fixes=[
                                 LintFix.create_before(
                                     # NB the anchor here is always in the parent and not
@@ -212,7 +209,5 @@ class Rule_L006(BaseRule):
                         )
                     )
 
-        if violations:
-            return violations
 
-        return LintResult()
+        return violations or LintResult()

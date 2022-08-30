@@ -160,20 +160,19 @@ class Rule_L010(BaseRule):
                 self.logger.debug(
                     f"Getting concrete policy '{concrete_policy}' from memory"
                 )
-        else:
-            if cap_policy not in refuted_cases:
-                # Skip
-                self.logger.debug(
-                    f"Consistent capitalization {cap_policy}, returning with "
-                    f"memory: {memory}"
-                )
-                return LintResult(memory=memory)
-            else:
-                concrete_policy = cap_policy
-                self.logger.debug(
-                    f"Setting concrete policy '{concrete_policy}' from cap_policy"
-                )
+        elif cap_policy in refuted_cases:
+            concrete_policy = cap_policy
+            self.logger.debug(
+                f"Setting concrete policy '{concrete_policy}' from cap_policy"
+            )
 
+        else:
+            # Skip
+            self.logger.debug(
+                f"Consistent capitalization {cap_policy}, returning with "
+                f"memory: {memory}"
+            )
+            return LintResult(memory=memory)
         # Set the fixed to same as initial in case any of below don't match
         fixed_raw = segment.raw
         # We need to change the segment to match the concrete policy

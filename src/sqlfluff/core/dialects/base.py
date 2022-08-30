@@ -82,7 +82,7 @@ class Dialect:
         ]:  # e.g. reserved_keywords, (JOIN, ...)
             # Make sure the values are available as KeywordSegments
             for kw in expanded_copy.sets(keyword_set):
-                n = kw.capitalize() + "KeywordSegment"
+                n = f"{kw.capitalize()}KeywordSegment"
                 if n not in expanded_copy._library:
                     expanded_copy._library[n] = StringParser(kw.lower(), KeywordSegment)
         expanded_copy.expanded = True
@@ -113,10 +113,7 @@ class Dialect:
             raise ValueError("Attempted to copy an already expanded dialect.")
 
         # Copy sets if they are passed, so they can be mutated independently
-        new_sets = {}
-        for label in self._sets:
-            new_sets[label] = self._sets[label].copy()
-
+        new_sets = {label: self._sets[label].copy() for label in self._sets}
         return self.__class__(
             name=name,
             library=self._library.copy(),
@@ -148,10 +145,9 @@ class Dialect:
 
         Usage is very similar to add, but elements specified must already exist.
         """
-        for n in kwargs:
+        for n, cls in kwargs.items():
             if n not in self._library:  # pragma: no cover
                 raise ValueError(f"{n!r} is not already registered in {self!r}")
-            cls = kwargs[n]
             if self._library[n] is cls:
                 continue
             elif self._library[n] == cls:
@@ -176,10 +172,11 @@ class Dialect:
                         )
 
                     cls_dir = set(dir(cls))
-                    missing = set(
-                        n for n in base_dir.difference(cls_dir) if not n.startswith("_")
-                    )
-                    if missing:
+                    if missing := {
+                        n
+                        for n in base_dir.difference(cls_dir)
+                        if not n.startswith("_")
+                    }:
                         raise ValueError(  # pragma: no cover
                             f"Cannot replace {n!r} because it's not a subclass and "
                             f"is missing these from base: {', '.join(missing)}"
@@ -258,10 +255,9 @@ class Dialect:
             raise RuntimeError("Dialect must be expanded before use.")
 
         if name in self._library:
-            res = self._library[name]
-            if res:
+            if res := self._library[name]:
                 return res
-            else:  # pragma: no cover
+            else:
                 raise ValueError(
                     "Unexpected Null response while fetching {!r} from {}".format(
                         name, self.name
@@ -335,12 +331,8 @@ class Dialect:
         for elem in self.lexer_matchers:
             if elem.name == before:
                 found = True
-                for patch in lexer_patch:
-                    buff.append(patch)
-                buff.append(elem)
-            else:
-                buff.append(elem)
-
+                buff.extend(iter(lexer_patch))
+            buff.append(elem)
         if not found:  # pragma: no cover
             raise ValueError(
                 "Lexer struct insert before '%s' failed because tag never found."

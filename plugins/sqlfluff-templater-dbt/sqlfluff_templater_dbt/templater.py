@@ -271,17 +271,15 @@ class DbtTemplater(JinjaTemplater):
             full_paths[fpath] = fname
             selected_files.add(fpath)
 
-        ephemeral_nodes: Dict[str, Tuple[str, Any]] = {}
+        ephemeral_nodes: Dict[str, Tuple[str, Any]] = {
+            key: (
+                os.path.join(self.project_dir, node.original_file_path),
+                node.depends_on.nodes,
+            )
+            for key, node in self.dbt_manifest.nodes.items()
+            if node.config.materialized == "ephemeral"
+        }
 
-        # Extract the ephemeral models
-        for key, node in self.dbt_manifest.nodes.items():
-            if node.config.materialized == "ephemeral":
-                # The key is the full filepath.
-                # The value tuple, with the filepath and a list of dependent keys
-                ephemeral_nodes[key] = (
-                    os.path.join(self.project_dir, node.original_file_path),
-                    node.depends_on.nodes,
-                )
 
         # Yield ephemeral nodes first. We use a deque for efficient re-queuing.
         # We iterate through the deque, yielding any nodes without dependents,
@@ -397,14 +395,11 @@ class DbtTemplater(JinjaTemplater):
         results = [self.dbt_manifest.expect(uid) for uid in selected]
 
         if not results:
-            skip_reason = self._find_skip_reason(fname)
-            if skip_reason:
+            if skip_reason := self._find_skip_reason(fname):
                 raise SQLFluffSkipFile(
                     f"Skipped file {fname} because it is {skip_reason}"
                 )
-            raise SQLFluffSkipFile(
-                "File %s was not found in dbt project" % fname
-            )  # pragma: no cover
+            raise SQLFluffSkipFile(f"File {fname} was not found in dbt project")
         return results[0]
 
     def _find_skip_reason(self, fname) -> Optional[str]:
@@ -449,16 +444,15 @@ class DbtTemplater(JinjaTemplater):
             globals = kwargs.get("globals")
             if globals:
                 model = globals.get("model")
-                if model:
-                    if model.get("original_file_path") == original_file_path:
-                        # Yes. Capture the important arguments and create
-                        # a make_template() function.
-                        env = args[0]
-                        globals = args[2] if len(args) >= 3 else kwargs["globals"]
+                if model and model.get("original_file_path") == original_file_path:
+                    # Yes. Capture the important arguments and create
+                    # a make_template() function.
+                    env = args[0]
+                    globals = args[2] if len(args) >= 3 else kwargs["globals"]
 
-                        def make_template(in_str):
-                            env.add_extension(SnapshotExtension)
-                            return env.from_string(in_str, globals=globals)
+                    def make_template(in_str):
+                        env.add_extension(SnapshotExtension)
+                        return env.from_string(in_str, globals=globals)
 
             return old_from_string(*args, **kwargs)
 
@@ -467,12 +461,13 @@ class DbtTemplater(JinjaTemplater):
             "_find_node for path %r returned object of type %s.", fname, type(node)
         )
 
-        save_ephemeral_nodes = dict(
-            (k, v)
+        save_ephemeral_nodes = {
+            k: v
             for k, v in self.dbt_manifest.nodes.items()
             if v.config.materialized == "ephemeral"
             and not getattr(v, "compiled", False)
-        )
+        }
+
         with self.connection():
             # Apply the monkeypatch.
             Environment.from_string = from_string
@@ -518,16 +513,11 @@ class DbtTemplater(JinjaTemplater):
             with open(fname) as source_dbt_model:
                 source_dbt_sql = source_dbt_model.read()
 
-            if not source_dbt_sql.rstrip().endswith("-%}"):
-                n_trailing_newlines = len(source_dbt_sql) - len(
-                    source_dbt_sql.rstrip("\n")
-                )
-            else:
-                # Source file ends with right whitespace stripping, so there's
-                # no need to preserve/restore trailing newlines, as they would
-                # have been removed regardless of dbt's
-                # keep_trailing_newlines=False behavior.
-                n_trailing_newlines = 0
+            n_trailing_newlines = (
+                0
+                if source_dbt_sql.rstrip().endswith("-%}")
+                else len(source_dbt_sql) - len(source_dbt_sql.rstrip("\n"))
+            )
 
             templater_logger.debug(
                 "    Trailing newline count in source dbt model: %r",
@@ -601,18 +591,12 @@ class DbtTemplater(JinjaTemplater):
         # We have to register the connection in dbt >= 1.0.0 ourselves
         # In previous versions, we relied on the functionality removed in
         # https://github.com/dbt-labs/dbt-core/pull/4062.
-        if DBT_VERSION_TUPLE >= (1, 0):
-            if not self.connection_acquired:
-                adapter = get_adapter(self.dbt_config)
-                adapter.acquire_connection("master")
-                adapter.set_relations_cache(self.dbt_manifest)
-                self.connection_acquired = True
-            yield
-            # :TRICKY: Once connected, we never disconnect. Making multiple
-            # connections during linting has proven to cause major performance
-            # issues.
-        else:
-            yield
+        if DBT_VERSION_TUPLE >= (1, 0) and not self.connection_acquired:
+            adapter = get_adapter(self.dbt_config)
+            adapter.acquire_connection("master")
+            adapter.set_relations_cache(self.dbt_manifest)
+            self.connection_acquired = True
+        yield
 
 
 class SnapshotExtension(StandaloneTag):

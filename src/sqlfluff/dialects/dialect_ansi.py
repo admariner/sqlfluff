@@ -830,9 +830,7 @@ class ObjectReferenceSegment(BaseSegment):
         """
         level = self._level_to_int(level)
         refs = list(self.iter_raw_references())
-        if len(refs) >= level:
-            return [refs[-level]]
-        return []
+        return [refs[-level]] if len(refs) >= level else []
 
     def extract_possible_multipart_references(
         self, levels: List[Union[ObjectReferenceLevel, int]]
@@ -1249,25 +1247,24 @@ class FromExpressionElementSegment(BaseSegment):
         if not tbl_expression:  # pragma: no cover
             tbl_expression = self.get_child("bracketed").get_child("table_expression")
         # For TSQL nested, bracketed tables get the first table as reference
-        if tbl_expression and not tbl_expression.get_child("object_reference"):
-            if tbl_expression.get_child("bracketed"):
-                tbl_expression = tbl_expression.get_child("bracketed").get_child(
-                    "table_expression"
-                )
+        if (
+            tbl_expression
+            and not tbl_expression.get_child("object_reference")
+            and tbl_expression.get_child("bracketed")
+        ):
+            tbl_expression = tbl_expression.get_child("bracketed").get_child(
+                "table_expression"
+            )
         ref = tbl_expression.get_child("object_reference") if tbl_expression else None
         if alias_expression:
-            # If it has an alias, return that
-            segment = alias_expression.get_child("identifier")
-            if segment:
+            if segment := alias_expression.get_child("identifier"):
                 return AliasInfo(
                     segment.raw, segment, True, self, alias_expression, ref
                 )
 
         # If not return the object name (or None if there isn't one)
         if ref:
-            references: List = list(ref.iter_raw_references())
-            # Return the last element of the reference.
-            if references:
+            if references := list(ref.iter_raw_references()):
                 penultimate_ref: ObjectReferenceSegment.ObjectReferencePart = (
                     references[-1]
                 )
@@ -1514,10 +1511,7 @@ class JoinClauseSegment(BaseSegment):
         buff = []
 
         from_expression = self.get_child("from_expression_element")
-        alias: AliasInfo = from_expression.get_eventual_alias()
-        # Only append if non null. A None reference, may
-        # indicate a generator expression or similar.
-        if alias:
+        if alias := from_expression.get_eventual_alias():
             buff.append((from_expression, alias))
 
         # In some dialects, like TSQL, join clauses can have nested join clauses
@@ -1529,12 +1523,7 @@ class JoinClauseSegment(BaseSegment):
                 # If the starting segment itself matches the list of types we're
                 # searching for, recursive_crawl() will return it. Skip that.
                 continue
-            aliases: List[
-                Tuple[BaseSegment, AliasInfo]
-            ] = join_clause.get_eventual_aliases()
-            # Only append if non null. A None reference, may
-            # indicate a generator expression or similar.
-            if aliases:
+            if aliases := join_clause.get_eventual_aliases():
                 buff = buff + aliases
         return buff
 
@@ -1612,10 +1601,7 @@ class FromClauseSegment(BaseSegment):
             if alias:
                 buff.append((table_expr, alias))
         for clause in join_clauses:
-            aliases: List[Tuple[BaseSegment, AliasInfo]] = clause.get_eventual_aliases()
-            # Only append if non null. A None reference, may
-            # indicate a generator expression or similar.
-            if aliases:
+            if aliases := clause.get_eventual_aliases():
                 buff = buff + aliases
         return buff
 

@@ -56,7 +56,7 @@ class RuleLoggingAdapter(logging.LoggerAdapter):
 
     def process(self, msg, kwargs):
         """Add the code element to the logging message before emit."""
-        return "[{}] {}".format(self.extra["code"], msg), kwargs
+        return f'[{self.extra["code"]}] {msg}', kwargs
 
 
 class LintResult:
@@ -235,9 +235,7 @@ class LintFix:
                 detail = f"create:{new_detail!r}"
         else:
             detail = ""  # pragma: no cover TODO?
-        return "<LintFix: {} @{} {}>".format(
-            self.edit_type, self.anchor.pos_marker, detail
-        )
+        return f"<LintFix: {self.edit_type} @{self.anchor.pos_marker} {detail}>"
 
     def __eq__(self, other):
         """Compare equality with another fix.
@@ -248,11 +246,7 @@ class LintFix:
         """
         if not self.edit_type == other.edit_type:
             return False
-        if not self.anchor == other.anchor:
-            return False
-        if not self.edit == other.edit:
-            return False
-        return True  # pragma: no cover TODO?
+        return self.edit == other.edit if self.anchor == other.anchor else False
 
     @classmethod
     def delete(cls, anchor_segment: BaseSegment) -> "LintFix":
@@ -307,18 +301,18 @@ class LintFix:
         # If "within_only" is set for a "create_*" fix, the slice should only
         # include the area of code "within" the area of insertion, not the other
         # side.
-        adjust_boundary = 1 if not within_only else 0
-        if self.edit_type == "create_before":
-            # Consider the first position of the anchor segment and the
-            # position just before it.
-            templated_slices = [
-                slice(anchor_slice.start - 1, anchor_slice.start + adjust_boundary),
-            ]
-        elif self.edit_type == "create_after":
+        adjust_boundary = 0 if within_only else 1
+        if self.edit_type == "create_after":
             # Consider the last position of the anchor segment and the
             # character just after it.
             templated_slices = [
                 slice(anchor_slice.stop - adjust_boundary, anchor_slice.stop + 1),
+            ]
+        elif self.edit_type == "create_before":
+            # Consider the first position of the anchor segment and the
+            # position just before it.
+            templated_slices = [
+                slice(anchor_slice.start - 1, anchor_slice.start + adjust_boundary),
             ]
         # TRICKY: For creations at the end of the file, there won't be an
         # existing slice. In this case, the function adds file_end_slice to the
@@ -429,12 +423,9 @@ class BaseRule:
             for keyword in self.config_keywords:
                 if keyword not in kwargs.keys():
                     raise ValueError(
-                        (
-                            "Unrecognized config '{}' for Rule {}. If this "
-                            "is a new option, please add it to "
-                            "`default_config.cfg`"
-                        ).format(keyword, code)
+                        f"Unrecognized config '{keyword}' for Rule {code}. If this is a new option, please add it to `default_config.cfg`"
                     )
+
         except AttributeError:
             self.logger.info(f"No config_keywords defined for {code}")
 
@@ -457,11 +448,8 @@ class BaseRule:
 
         """
         raise NotImplementedError(
-            (
-                "{} has not had its `eval` function defined. This is a problem "
-                "with the rule setup."
-            ).format(self.__class__.__name__)
-        )  # pragma: no cover
+            f"{self.__class__.__name__} has not had its `eval` function defined. This is a problem with the rule setup."
+        )
 
     def crawl(
         self,
@@ -491,7 +479,7 @@ class BaseRule:
         # Propagates memory from one rule _eval() to the next.
         memory: Any = root_context.memory
         context = root_context
-        for context in self.crawl_behaviour.crawl(root_context):
+        for context in self.crawl_behaviour.crawl(context):
             try:
                 context.memory = memory
                 res = self._eval(context=context)
@@ -576,12 +564,11 @@ class BaseRule:
         self.discard_unsafe_fixes(res, templated_file)
         lerr = res.to_linting_error(rule=self)
         ignored = False
-        if lerr:
-            if ignore_mask:
-                filtered = LintedFile.ignore_masked_violations([lerr], ignore_mask)
-                if not filtered:
-                    lerr = None
-                    ignored = True
+        if lerr and ignore_mask:
+            filtered = LintedFile.ignore_masked_violations([lerr], ignore_mask)
+            if not filtered:
+                lerr = None
+                ignored = True
         if lerr:
             new_lerrs.append(lerr)
         if not ignored:
@@ -603,14 +590,11 @@ class BaseRule:
 
         Or optionally the opposite if keep_meta is True.
         """
-        buff = []
-        for elem in segments:
-            if elem.is_meta is keep_meta:
-                buff.append(elem)
+        buff = [elem for elem in segments if elem.is_meta is keep_meta]
         return tuple(buff)
 
     @classmethod
-    def get_parent_of(cls, segment, root_segment):  # pragma: no cover TODO?
+    def get_parent_of(cls, segment, root_segment):    # pragma: no cover TODO?
         """Return the segment immediately containing segment.
 
         NB: This is recursive.
@@ -627,8 +611,7 @@ class BaseRule:
         elif root_segment.segments:
             # try each of the subsegments
             for sub in root_segment.segments:
-                p = cls.get_parent_of(segment, sub)
-                if p:
+                if p := cls.get_parent_of(segment, sub):
                     return p
         # Not directly in the segment and
         # no subsegments to check. Return None.
@@ -827,10 +810,11 @@ class RuleSet:
         rule_config = config.get_section("rules")
         for config_name, info_dict in self.config_info.items():
             config_option = (
-                rule_config.get(config_name)
-                if not rule
-                else rule_config.get(rule).get(config_name)
+                rule_config.get(rule).get(config_name)
+                if rule
+                else rule_config.get(config_name)
             )
+
             valid_options = info_dict.get("validation")
             if (
                 valid_options
@@ -838,13 +822,7 @@ class RuleSet:
                 and config_option is not None
             ):
                 raise ValueError(
-                    (
-                        "Invalid option '{}' for {} configuration. Must be one of {}"
-                    ).format(
-                        config_option,
-                        config_name,
-                        valid_options,
-                    )
+                    f"Invalid option '{config_option}' for {config_name} configuration. Must be one of {valid_options}"
                 )
 
     @property
@@ -978,9 +956,10 @@ class RuleSet:
         # Validate all generic rule configs
         self._validate_config_options(config)
         # Find all valid groups for ruleset
-        valid_groups: Set[str] = set(
-            [group for attrs in self._register.values() for group in attrs["groups"]]
-        )
+        valid_groups: Set[str] = {
+            group for attrs in self._register.values() for group in attrs["groups"]
+        }
+
         # default the allowlist to all the rules if not set
         allowlist = config.get("rule_allowlist") or list(self._register.keys())
         denylist = config.get("rule_denylist") or []
@@ -1035,7 +1014,7 @@ class RuleSet:
                 ("rules", self._register[k]["code"])
             )
             if generic_rule_config:
-                kwargs.update(generic_rule_config)
+                kwargs |= generic_rule_config
             if specific_rule_config:
                 # Validate specific rule config before adding
                 self._validate_config_options(config, self._register[k]["code"])

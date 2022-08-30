@@ -27,14 +27,14 @@ class TimingSummary:
             for step in self.steps:
                 if step in timing_dict:
                     vals[step].append(timing_dict[step])
-        summary = {}
-        for step in self.steps:
-            if vals[step]:
-                summary[step] = {
-                    "cnt": len(vals[step]),
-                    "sum": sum(vals[step]),
-                    "min": min(vals[step]),
-                    "max": max(vals[step]),
-                    "avg": sum(vals[step]) / len(vals[step]),
-                }
-        return summary
+        return {
+            step: {
+                "cnt": len(vals[step]),
+                "sum": sum(vals[step]),
+                "min": min(vals[step]),
+                "max": max(vals[step]),
+                "avg": sum(vals[step]) / len(vals[step]),
+            }
+            for step in self.steps
+            if vals[step]
+        }

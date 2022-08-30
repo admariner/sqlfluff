@@ -39,10 +39,7 @@ class RawSegment(BaseSegment):
         If pos_marker is not provided, it is assume that this will be
         inserted later as part of a reposition phase.
         """
-        if raw is not None:  # NB, raw *can* be an empty string and be valid
-            self._raw = raw
-        else:
-            self._raw = self._default_raw
+        self._raw = raw if raw is not None else self._default_raw
         self._raw_upper = self._raw.upper()
         # pos marker is required here. We ignore the typing initially
         # because it might *initially* be unset, but it will be reset

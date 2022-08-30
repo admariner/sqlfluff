@@ -189,7 +189,7 @@ class PythonTemplater(RawTemplater):
         else:
             loaded_context = {}
         live_context = {}
-        live_context.update(self.default_context)
+        live_context |= self.default_context
         live_context.update(loaded_context)
         live_context.update(self.override_context)
 
@@ -227,9 +227,9 @@ class PythonTemplater(RawTemplater):
         except KeyError as err:
             # TODO: Add a url here so people can get more help.
             raise SQLTemplaterError(
-                "Failure in Python templating: {}. Have you configured your "
-                "variables?".format(err)
+                f"Failure in Python templating: {err}. Have you configured your variables?"
             )
+
         raw_sliced, sliced_file, new_str = self.slice_file(
             in_str, new_str, config=config
         )
@@ -378,10 +378,9 @@ class PythonTemplater(RawTemplater):
         cls, in_str: str, substrings: Iterable[str]
     ) -> Dict[str, List[int]]:
         """Find every occurrence of the given substrings."""
-        occurrences = {}
-        for substring in substrings:
-            occurrences[substring] = list(findall(substring, in_str))
-        return occurrences
+        return {
+            substring: list(findall(substring, in_str)) for substring in substrings
+        }
 
     @staticmethod
     def _sorted_occurrence_tuples(
@@ -389,8 +388,7 @@ class PythonTemplater(RawTemplater):
     ) -> List[Tuple[str, int]]:
         """Sort a dict of occurrences into a sorted list of tuples."""
         return sorted(
-            ((raw, idx) for raw in occurrences.keys() for idx in occurrences[raw]),
-            # Sort first by position, then by lexical (for stability)
+            ((raw, idx) for raw in occurrences for idx in occurrences[raw]),
             key=lambda x: (x[1], x[0]),
         )
 
@@ -555,9 +553,10 @@ class PythonTemplater(RawTemplater):
                 for pos in occurrences[key]
                 if pos >= file_slice.start and pos < file_slice.stop
             ]
-            for key in occurrences.keys()
+            for key in occurrences
         }
-        return {key: filtered[key] for key in filtered.keys() if filtered[key]}
+
+        return {key: filtered[key] for key in filtered if filtered[key]}
 
     @staticmethod
     def _coalesce_types(elems: List[RawFileSlice]) -> str:

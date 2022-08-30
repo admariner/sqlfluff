@@ -78,15 +78,11 @@ def document_configuration(cls, ruleset="std"):
                     "Config value {!r} for rule {} is not configured in "
                     "`config_info`.".format(keyword, cls.__name__)
                 )
-            config_doc += "\n    * ``{}``: {}".format(keyword, info_dict["definition"])
-            if (
-                config_doc[-1] != "."
-                and config_doc[-1] != "?"
-                and config_doc[-1] != "\n"
-            ):
+            config_doc += f'\n    * ``{keyword}``: {info_dict["definition"]}'
+            if config_doc[-1] not in [".", "?", "\n"]:
                 config_doc += "."
             if "validation" in info_dict:
-                config_doc += " Must be one of ``{}``.".format(info_dict["validation"])
+                config_doc += f' Must be one of ``{info_dict["validation"]}``.'
     except AttributeError:
         rules_logger.info(f"No config_keywords defined for {cls.__name__}")
         return cls

@@ -57,25 +57,28 @@ class Rule_L002(BaseRule):
         # Config type hints
         self.tab_space_size: int
 
-        if context.segment.is_type("whitespace"):
-            if " " in context.segment.raw and "\t" in context.segment.raw:
-                if not context.raw_stack or context.raw_stack[-1].is_type("newline"):
-                    # We've got a single whitespace at the beginning of a line.
-                    # It's got a mix of spaces and tabs. Replace each tab with
-                    # a multiple of spaces
-                    return LintResult(
-                        anchor=context.segment,
-                        fixes=[
-                            LintFix.replace(
-                                context.segment,
-                                [
-                                    context.segment.edit(
-                                        context.segment.raw.replace(
-                                            "\t", " " * self.tab_space_size
-                                        )
-                                    ),
-                                ],
+        if (
+            context.segment.is_type("whitespace")
+            and " " in context.segment.raw
+            and "\t" in context.segment.raw
+            and (not context.raw_stack or context.raw_stack[-1].is_type("newline"))
+        ):
+            # We've got a single whitespace at the beginning of a line.
+            # It's got a mix of spaces and tabs. Replace each tab with
+            # a multiple of spaces
+            return LintResult(
+                anchor=context.segment,
+                fixes=[
+                    LintFix.replace(
+                        context.segment,
+                        [
+                            context.segment.edit(
+                                context.segment.raw.replace(
+                                    "\t", " " * self.tab_space_size
+                                )
                             ),
                         ],
-                    )
+                    ),
+                ],
+            )
         return None

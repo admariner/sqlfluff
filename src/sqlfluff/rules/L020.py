@@ -78,13 +78,11 @@ class Rule_L020(BaseRule):
         NB: Subclasses of this error should override this function.
 
         """
-        # Are any of the aliases the same?
-        duplicate = set()
-        for a1, a2 in itertools.combinations(table_aliases, 2):
-            # Compare the strings
-            if a1.ref_str == a2.ref_str and a1.ref_str:
-                duplicate.add(a2)
-        if duplicate:
+        if duplicate := {
+            a2
+            for a1, a2 in itertools.combinations(table_aliases, 2)
+            if a1.ref_str == a2.ref_str and a1.ref_str
+        }:
             return [
                 LintResult(
                     # Reference the element, not the string.
@@ -112,12 +110,14 @@ class Rule_L020(BaseRule):
         if not select_info:
             return None
 
-        # Work out if we have a parent select function
-        parent_select = None
-        for seg in reversed(context.parent_stack):
-            if seg.is_type("select_statement"):
-                parent_select = seg
-                break
+        parent_select = next(
+            (
+                seg
+                for seg in reversed(context.parent_stack)
+                if seg.is_type("select_statement")
+            ),
+            None,
+        )
 
         # Pass them all to the function that does all the work.
         # NB: Subclasses of this rules should override the function below

@@ -87,9 +87,7 @@ class JinjaTemplater(PythonTemplater):
                     template = opened_file.read()
                 # Update the context with macros from the file.
                 try:
-                    macro_ctx.update(
-                        cls._extract_macros_from_template(template, env=env, ctx=ctx)
-                    )
+                    macro_ctx |= cls._extract_macros_from_template(template, env=env, ctx=ctx)
                 except TemplateSyntaxError as err:
                     raise SQLTemplaterError(
                         f"Error in Jinja macro file {os.path.relpath(path_entry)}: "
@@ -122,9 +120,7 @@ class JinjaTemplater(PythonTemplater):
         # Iterate to load macros
         macro_ctx = {}
         for value in loaded_context.values():
-            macro_ctx.update(
-                self._extract_macros_from_template(value, env=env, ctx=ctx)
-            )
+            macro_ctx |= self._extract_macros_from_template(value, env=env, ctx=ctx)
         return macro_ctx
 
     def _extract_libraries_from_config(self, config):
@@ -179,9 +175,9 @@ class JinjaTemplater(PythonTemplater):
     @staticmethod
     def _generate_dbt_builtins():
         """Generate the dbt builtins which are injected in the context."""
-        # This feels a bit wrong defining these here, they should probably
-        # be configurable somewhere sensible. But for now they're not.
-        # TODO: Come up with a better solution.
+    # This feels a bit wrong defining these here, they should probably
+    # be configurable somewhere sensible. But for now they're not.
+    # TODO: Come up with a better solution.
 
         class ThisEmulator:
             """A class which emulates the `this` class from dbt."""
@@ -193,7 +189,7 @@ class JinjaTemplater(PythonTemplater):
             def __str__(self):  # pragma: no cover TODO?
                 return self.name
 
-        dbt_builtins = {
+        return {
             "ref": lambda model_ref: model_ref,
             "source": lambda source_name, table: f"{source_name}_{table}",
             "config": lambda **kwargs: "",
@@ -206,7 +202,6 @@ class JinjaTemplater(PythonTemplater):
             "is_incremental": lambda: True,
             "this": ThisEmulator(),
         }
-        return dbt_builtins
 
     @classmethod
     def _crawl_tree(
@@ -235,9 +230,7 @@ class JinjaTemplater(PythonTemplater):
         """Get a properly configured jinja environment."""
         # We explicitly want to preserve newlines.
         macros_path = self._get_macros_path(config)
-        ignore_templating = config and "templating" in config.get("ignore")
-        if ignore_templating:
-
+        if ignore_templating := config and "templating" in config.get("ignore"):
             class SafeFileSystemLoader(FileSystemLoader):
                 def get_source(self, environment, name, *args, **kwargs):
                     try:
@@ -270,12 +263,12 @@ class JinjaTemplater(PythonTemplater):
 
     def _get_macros_path(self, config: FluffConfig) -> Optional[List[str]]:
         if config:
-            macros_path = config.get_section(
+            if macros_path := config.get_section(
                 (self.templater_selector, self.name, "load_macros_from_path")
-            )
-            if macros_path:
-                result = [s.strip() for s in macros_path.split(",") if s.strip()]
-                if result:
+            ):
+                if result := [
+                    s.strip() for s in macros_path.split(",") if s.strip()
+                ]:
                     return result
         return None
 
@@ -286,10 +279,9 @@ class JinjaTemplater(PythonTemplater):
         live_context = super().get_context(fname=fname, config=config)
         # Apply dbt builtin functions if we're allowed.
         if config:
-            apply_dbt_builtins = config.get_section(
+            if apply_dbt_builtins := config.get_section(
                 (self.templater_selector, self.name, "apply_dbt_builtins")
-            )
-            if apply_dbt_builtins:
+            ):
                 # This feels a bit wrong defining these here, they should probably
                 # be configurable somewhere sensible. But for now they're not.
                 # TODO: Come up with a better solution.
@@ -301,8 +293,7 @@ class JinjaTemplater(PythonTemplater):
 
         # Load macros from path (if applicable)
         if config:
-            macros_path = self._get_macros_path(config)
-            if macros_path:
+            if macros_path := self._get_macros_path(config):
                 live_context.update(
                     self._extract_macros_from_path(
                         macros_path, env=env, ctx=live_context
@@ -448,10 +439,12 @@ class JinjaTemplater(PythonTemplater):
             )
             if undefined_variables:
                 # Lets go through and find out where they are:
-                for template_err_val in self._crawl_tree(
-                    syntax_tree, undefined_variables, in_str
-                ):
-                    violations.append(template_err_val)
+                violations.extend(
+                    iter(
+                        self._crawl_tree(syntax_tree, undefined_variables, in_str)
+                    )
+                )
+
             return (
                 TemplatedFile(
                     source_str=in_str,
@@ -465,18 +458,11 @@ class JinjaTemplater(PythonTemplater):
         except (TemplateError, TypeError) as err:
             templater_logger.info("Unrecoverable Jinja Error: %s", err, exc_info=True)
             template_err: SQLBaseError = SQLTemplaterError(
-                (
-                    "Unrecoverable failure in Jinja templating: {}. Have you "
-                    "configured your variables? "
-                    "https://docs.sqlfluff.com/en/latest/configuration.html"
-                ).format(err),
-                # We don't have actual line number information, but specify
-                # line 1 so users can ignore with "noqa" if they want. (The
-                # default is line 0, which can't be ignored because it's not
-                # a valid line number.)
+                f"Unrecoverable failure in Jinja templating: {err}. Have you configured your variables? https://docs.sqlfluff.com/en/latest/configuration.html",
                 line_no=1,
                 line_pos=1,
             )
+
             violations.append(template_err)
             return None, violations
 
@@ -532,8 +518,7 @@ class DummyUndefined(jinja2.Undefined):
         templater_logger.debug(
             "Providing dummy value for undefined Jinja variable: %s", name
         )
-        result = DummyUndefined(name)
-        return result
+        return DummyUndefined(name)
 
     def __getattr__(self, item):
         return self.create(f"{self.name}.{item}")

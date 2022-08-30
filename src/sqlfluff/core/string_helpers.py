@@ -10,10 +10,7 @@ def frame_msg(msg: str) -> str:
 
 def curtail_string(s: str, length=20) -> str:
     """Trim a string nicely to length."""
-    if len(s) > length:
-        return s[:length] + "..."
-    else:
-        return s
+    return f"{s[:length]}..." if len(s) > length else s
 
 
 def findall(substr: str, in_str: str) -> Iterator[int]:
