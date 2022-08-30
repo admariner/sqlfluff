@@ -71,13 +71,12 @@ class LintedDir:
                 )
                 for file in self.files
             }
-        else:
-            tuple_buffer: List[CheckTuple] = []
-            for file in self.files:
-                tuple_buffer += file.check_tuples(
-                    raise_on_non_linting_violations=raise_on_non_linting_violations
-                )
-            return tuple_buffer
+        tuple_buffer: List[CheckTuple] = []
+        for file in self.files:
+            tuple_buffer += file.check_tuples(
+                raise_on_non_linting_violations=raise_on_non_linting_violations
+            )
+        return tuple_buffer
 
     def num_violations(self, **kwargs) -> int:
         """Count the number of violations in the path."""

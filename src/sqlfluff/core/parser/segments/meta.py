@@ -30,12 +30,10 @@ class MetaSegment(RawSegment):
 
     @classmethod
     @match_wrapper()
-    def match(cls, segments, parse_context):  # pragma: no cover
+    def match(cls, segments, parse_context):    # pragma: no cover
         """This will never be called. If it is then we're using it wrong."""
         raise NotImplementedError(
-            "{} has no match method, it should only be used in a Sequence!".format(
-                cls.__name__
-            )
+            f"{cls.__name__} has no match method, it should only be used in a Sequence!"
         )
 
     @classmethod

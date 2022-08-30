@@ -68,10 +68,9 @@ class Rule_L019(BaseRule):
         A return value of `None` indicates no code segments preceding the current
         position.
         """
-        for segment in raw_stack[::-1]:
-            if segment.is_comment:
-                return segment
-        return None
+        return next(
+            (segment for segment in raw_stack[::-1] if segment.is_comment), None
+        )
 
     @staticmethod
     def _last_code_seg(raw_stack: Tuple[RawSegment, ...]) -> Optional[RawSegment]:
@@ -80,10 +79,14 @@ class Rule_L019(BaseRule):
         A return value of `None` indicates no code segments preceding the current
         position.
         """
-        for segment in raw_stack[::-1]:
-            if segment.is_code or segment.is_type("newline"):
-                return segment
-        return None
+        return next(
+            (
+                segment
+                for segment in raw_stack[::-1]
+                if segment.is_code or segment.is_type("newline")
+            ),
+            None,
+        )
 
     @staticmethod
     def _get_following_seg(
@@ -110,32 +113,29 @@ class Rule_L019(BaseRule):
         # Config type hints
         self.comma_style: str
 
-        if not context.memory:
-            memory: Dict[str, Any] = {
-                # Trailing comma keys
-                #
-                # Do we have a fix in place for removing a leading
-                # comma violation, and inserting a new trailing comma?
-                "insert_trailing_comma": False,
-                # A list of whitespace segments that come after a
-                # leading comma violation, to be removed during fixing.
-                "whitespace_deletions": None,
-                # The leading comma violation segment to be removed during fixing
-                "last_leading_comma_seg": None,
-                # The newline segment where we're going to insert our new trailing
-                # comma during fixing
-                "anchor_for_new_trailing_comma_seg": None,
-                #
-                # Leading comma keys
-                #
-                # Do we have a fix in place for removing a trailing
-                # comma violation, and inserting a new leading comma?
-                "insert_leading_comma": False,
-                # The trailing comma violation segment to be removed during fixing
-                "last_trailing_comma_segment": None,
-            }
-        else:
-            memory = context.memory
+        memory = context.memory or {
+            # Trailing comma keys
+            #
+            # Do we have a fix in place for removing a leading
+            # comma violation, and inserting a new trailing comma?
+            "insert_trailing_comma": False,
+            # A list of whitespace segments that come after a
+            # leading comma violation, to be removed during fixing.
+            "whitespace_deletions": None,
+            # The leading comma violation segment to be removed during fixing
+            "last_leading_comma_seg": None,
+            # The newline segment where we're going to insert our new trailing
+            # comma during fixing
+            "anchor_for_new_trailing_comma_seg": None,
+            #
+            # Leading comma keys
+            #
+            # Do we have a fix in place for removing a trailing
+            # comma violation, and inserting a new leading comma?
+            "insert_leading_comma": False,
+            # The trailing comma violation segment to be removed during fixing
+            "last_trailing_comma_segment": None,
+        }
 
         if self.comma_style == "trailing":
             # A comma preceded by a new line == a leading comma
@@ -158,8 +158,9 @@ class Rule_L019(BaseRule):
                     # If we have a comment right before the newline, then anchor
                     # the fix at the comment instead
                     memory["anchor_for_new_trailing_comma_seg"] = (
-                        last_seg if not inline_comment else last_comment_seg
+                        last_comment_seg if inline_comment else last_seg
                     )
+
                     # Trigger fix routine
                     memory["insert_trailing_comma"] = True
                     memory["whitespace_deletions"] = []
@@ -183,11 +184,11 @@ class Rule_L019(BaseRule):
                             context.raw_stack[
                                 : context.raw_stack.index(
                                     last_code_seg
-                                    if last_code_seg
-                                    else memory["last_leading_comma_seg"]
+                                    or memory["last_leading_comma_seg"]
                                 )
                             ]
                         )
+
                     return LintResult(
                         anchor=last_leading_comma_seg,
                         description="Found leading comma. Expected only trailing.",
@@ -220,22 +221,20 @@ class Rule_L019(BaseRule):
                     memory["last_trailing_comma_segment"] = last_seg
                     return LintResult(memory=memory)
             # Have we found a trailing comma violation?
-            if memory["insert_leading_comma"]:
-                # Only insert the comma here if this isn't a comment/whitespace segment
-                if context.segment.is_code:
-                    last_comma_seg = memory["last_trailing_comma_segment"]
-                    # Create whitespace to insert after the new leading comma
-                    new_whitespace_seg = WhitespaceSegment()
-                    return LintResult(
-                        anchor=last_comma_seg,
-                        description="Found trailing comma. Expected only leading.",
-                        fixes=[
-                            LintFix.delete(last_comma_seg),
-                            LintFix.create_before(
-                                anchor_segment=context.segment,
-                                edit_segments=[last_comma_seg, new_whitespace_seg],
-                            ),
-                        ],
-                    )
+            if memory["insert_leading_comma"] and context.segment.is_code:
+                last_comma_seg = memory["last_trailing_comma_segment"]
+                # Create whitespace to insert after the new leading comma
+                new_whitespace_seg = WhitespaceSegment()
+                return LintResult(
+                    anchor=last_comma_seg,
+                    description="Found trailing comma. Expected only leading.",
+                    fixes=[
+                        LintFix.delete(last_comma_seg),
+                        LintFix.create_before(
+                            anchor_segment=context.segment,
+                            edit_segments=[last_comma_seg, new_whitespace_seg],
+                        ),
+                    ],
+                )
         # Otherwise, no issue
         return None

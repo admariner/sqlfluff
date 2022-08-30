@@ -90,10 +90,7 @@ class LintedFile(NamedTuple):
             violations = [v for v in violations if isinstance(v, types)]
         # Filter rules
         if rules:
-            if isinstance(rules, str):
-                rules = (rules,)
-            else:
-                rules = tuple(rules)
+            rules = (rules, ) if isinstance(rules, str) else tuple(rules)
             violations = [v for v in violations if v.rule_code() in rules]
         # Filter fixable
         if fixable is not None:
@@ -346,17 +343,11 @@ class LintedFile(NamedTuple):
                     "      * Keeping patch on new or literal-only section: %s",
                     patch,
                 )
-                filtered_source_patches.append(patch)
-                dedupe_buffer.append(patch.dedupe_tuple())
-            # Handle the easy case of an explicit source fix
             elif patch.patch_category == "source":
                 linter_logger.info(
                     "      * Keeping explicit source fix patch: %s",
                     patch,
                 )
-                filtered_source_patches.append(patch)
-                dedupe_buffer.append(patch.dedupe_tuple())
-            # Is it a zero length patch.
             elif (
                 patch.source_slice.start == patch.source_slice.stop
                 and patch.source_slice.start == local_raw_slices[0].source_idx
@@ -365,8 +356,6 @@ class LintedFile(NamedTuple):
                     "      * Keeping insertion patch on slice boundary: %s",
                     patch,
                 )
-                filtered_source_patches.append(patch)
-                dedupe_buffer.append(patch.dedupe_tuple())
             else:
                 # We've got a situation where the ends of our patch need to be
                 # more carefully mapped. Likely because we're greedily including
@@ -401,10 +390,8 @@ class LintedFile(NamedTuple):
                     patch,
                 )
                 patch.source_slice = new_source_slice
-                filtered_source_patches.append(patch)
-                dedupe_buffer.append(patch.dedupe_tuple())
-                continue
-
+            filtered_source_patches.append(patch)
+            dedupe_buffer.append(patch.dedupe_tuple())
         # Sort the patches before building up the file.
         return sorted(filtered_source_patches, key=lambda x: x.source_slice.start)
 

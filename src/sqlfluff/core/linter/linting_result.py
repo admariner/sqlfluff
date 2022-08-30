@@ -50,7 +50,7 @@ class LintingResult:
         """Take any set of dictionaries and combine them."""
         dict_buffer: dict = {}
         for dct in d:
-            dict_buffer.update(dct)
+            dict_buffer |= dct
         return dict_buffer
 
     def add(self, path: LintedDir) -> None:
@@ -92,7 +92,7 @@ class LintingResult:
         if by_path:
             buff: Dict[LintedDir, List[CheckTuple]] = {}
             for path in self.paths:
-                buff.update(path.check_tuples(by_path=by_path))
+                buff |= path.check_tuples(by_path=by_path)
             return buff
         else:
             tuple_buffer: List[CheckTuple] = []
@@ -204,16 +204,14 @@ class LintingResult:
 
     def discard_fixes_for_lint_errors_in_files_with_tmp_or_prs_errors(self) -> None:
         """Discard lint fixes for files with templating or parse errors."""
-        total_errors = self.num_violations(
+        if total_errors := self.num_violations(
             types=self.TMP_PRS_ERROR_TYPES, filter_ignore=False
-        )
-        if total_errors:
+        ):
             for linted_dir in self.paths:
                 for linted_file in linted_dir.files:
-                    num_errors = linted_file.num_violations(
+                    if num_errors := linted_file.num_violations(
                         types=self.TMP_PRS_ERROR_TYPES, filter_ignore=False
-                    )
-                    if num_errors:
+                    ):
                         # File has errors. Discard all the SQLLintError fixes:
                         # they are potentially unsafe.
                         for violation in linted_file.violations:

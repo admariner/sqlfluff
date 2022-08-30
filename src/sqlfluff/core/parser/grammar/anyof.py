@@ -55,10 +55,14 @@ class AnyNumberOf(BaseGrammar):
     @staticmethod
     def _first_non_whitespace(segments) -> Optional[str]:
         """Return the upper first non-whitespace segment in the iterable."""
-        for segment in segments:
-            if segment.first_non_whitespace_segment_raw_upper:
-                return segment.first_non_whitespace_segment_raw_upper
-        return None
+        return next(
+            (
+                segment.first_non_whitespace_segment_raw_upper
+                for segment in segments
+                if segment.first_non_whitespace_segment_raw_upper
+            ),
+            None,
+        )
 
     def _prune_options(
         self, segments: Tuple[BaseSegment, ...], parse_context: ParseContext
@@ -225,21 +229,22 @@ class AnyNumberOf(BaseGrammar):
                         matched_segments.matched_segments, unmatched_segments
                     )
 
-            if match:
-                matched_segments += pre_seg + match.matched_segments
-                unmatched_segments = match.unmatched_segments
-                n_matches += 1
-            else:
+            if not match:
                 # If we get here, then we've not managed to match. And the next
                 # unmatched segments are meaningful, i.e. they're not what we're
                 # looking for.
-                if n_matches >= self.min_times:
-                    return MatchResult(
-                        matched_segments.matched_segments, pre_seg + unmatched_segments
+                return (
+                    MatchResult(
+                        matched_segments.matched_segments,
+                        pre_seg + unmatched_segments,
                     )
-                else:
-                    # We didn't meet the hurdle
-                    return MatchResult.from_unmatched(unmatched_segments)
+                    if n_matches >= self.min_times
+                    else MatchResult.from_unmatched(unmatched_segments)
+                )
+
+            matched_segments += pre_seg + match.matched_segments
+            unmatched_segments = match.unmatched_segments
+            n_matches += 1
 
 
 class OneOf(AnyNumberOf):

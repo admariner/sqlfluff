@@ -54,8 +54,7 @@ class Rule_L015(BaseRule):
         expression = (
             first_element.children(sp.is_type("expression")).first() or first_element
         )
-        bracketed = expression.children(sp.is_type("bracketed")).first()
-        if bracketed:
+        if bracketed := expression.children(sp.is_type("bracketed")).first():
             fixes = []
             # If there's nothing else in the expression, remove the brackets.
             if len(expression[0].segments) == 1:

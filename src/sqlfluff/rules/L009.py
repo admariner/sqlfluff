@@ -23,12 +23,10 @@ def get_last_segment(segment: Segments) -> Tuple[List[BaseSegment], Segments]:
     """Returns rightmost & lowest descendant and its "parent stack"."""
     parent_stack: List[BaseSegment] = []
     while True:
-        children = segment.children()
-        if children:
-            parent_stack.append(segment[0])
-            segment = children.last(predicate=sp.not_(sp.is_type("end_of_file")))
-        else:
+        if not (children := segment.children()):
             return parent_stack, segment
+        parent_stack.append(segment[0])
+        segment = children.last(predicate=sp.not_(sp.is_type("end_of_file")))
 
 
 @document_groups
@@ -137,10 +135,7 @@ class Rule_L009(BaseRule):
         self.logger.debug("Templated trailing newlines: %s", trailing_literal_newlines)
         if not trailing_literal_newlines:
             # We make an edit to create this segment after the child of the FileSegment.
-            if len(parent_stack) == 1:
-                fix_anchor_segment = segment[0]
-            else:
-                fix_anchor_segment = parent_stack[1]
+            fix_anchor_segment = segment[0] if len(parent_stack) == 1 else parent_stack[1]
             self.logger.debug("Anchor on: %s", fix_anchor_segment)
 
             return LintResult(

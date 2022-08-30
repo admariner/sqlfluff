@@ -32,7 +32,7 @@ def split_string_on_spaces(s: str, line_length: int = 100) -> List[str]:
                 line_buff.append(str_buff)
                 str_buff = token
             else:
-                str_buff += " " + token
+                str_buff += f" {token}"
         else:
             # In the case that the buffer is already empty, add it without checking,
             # otherwise there might be things that we might never.
@@ -155,9 +155,7 @@ class OutputStreamFormatter:
             self._dispatch(self.format_filename(filename=fname, success="TEMPLATING"))
             # This is where we output config diffs if they exist.
             if file_config:
-                # Only output config diffs if there is a config to diff to.
-                config_diff = file_config.diff_to(linter_config)
-                if config_diff:  # pragma: no cover
+                if config_diff := file_config.diff_to(linter_config):
                     self._dispatch("   Config Diff:")
                     self._dispatch(
                         self.format_config_vals(
@@ -241,10 +239,7 @@ class OutputStreamFormatter:
         plain_output: bool, s: str, color: Optional[Color] = None
     ) -> str:
         """Static version of colorize() method."""
-        if not color or plain_output:
-            return s
-        else:
-            return f"{color.value}{s}{Style.RESET_ALL}"
+        return s if not color or plain_output else f"{color.value}{s}{Style.RESET_ALL}"
 
     def cli_table_row(
         self,
@@ -326,17 +321,14 @@ class OutputStreamFormatter:
         formatted_fields = []
         for label, value in fields:
             label = str(label)
-            if isinstance(value, float):
-                value = float_format.format(value)
-            else:
-                value = str(value)
+            value = float_format.format(value) if isinstance(value, float) else str(value)
             formatted_fields.append((label, value))
 
         # Set up a buffer to hold the whole table
         buff = StringIO()
-        while len(formatted_fields) > 0:
+        while formatted_fields:
             row_buff: List[Tuple[str, str]] = []
-            while len(row_buff) < cols and len(formatted_fields) > 0:
+            while len(row_buff) < cols and formatted_fields:
                 row_buff.append(formatted_fields.pop(0))
             buff.write(
                 self.cli_table_row(
@@ -349,7 +341,7 @@ class OutputStreamFormatter:
                     val_align=val_align,
                 )
             )
-            if len(formatted_fields) > 0:
+            if formatted_fields:
                 buff.write("\n")
         return buff.getvalue()
 
@@ -381,7 +373,7 @@ class OutputStreamFormatter:
         pos_elem = "   -" if violation.line_pos is None else f"{violation.line_pos:4d}"
 
         if violation.ignore:
-            desc = "IGNORE: " + desc  # pragma: no cover
+            desc = f"IGNORE: {desc}"
 
         split_desc = split_string_on_spaces(desc, line_length=max_line_length - 25)
 
@@ -448,13 +440,19 @@ class OutputStreamFormatter:
         for i, k, v in config_vals:
             val = "" if v is None else str(v)
             text_buffer.write(
-                ("    " * i)
-                + self.colorize(
-                    pad_line(str(k) + ":", 20, "left"), color=Color.lightgrey
+                (
+                    (
+                        "    " * i
+                        + self.colorize(
+                            pad_line(f"{str(k)}:", 20, "left"),
+                            color=Color.lightgrey,
+                        )
+                    )
+                    + pad_line(val, 20, "left")
+                    + "\n"
                 )
-                + pad_line(val, 20, "left")
-                + "\n"
             )
+
         return text_buffer.getvalue()
 
     def format_rules(self, linter: Linter, verbose: int = 0) -> str:

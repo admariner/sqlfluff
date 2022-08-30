@@ -82,7 +82,7 @@ class PlaceholderTemplater(RawTemplater):
         else:
             loaded_context = {}
         live_context = {}
-        live_context.update(self.default_context)
+        live_context |= self.default_context
         live_context.update(loaded_context)
         live_context.update(self.override_context)
         if "param_regex" in live_context and "param_style" in live_context:
@@ -97,10 +97,9 @@ class PlaceholderTemplater(RawTemplater):
             param_style = live_context["param_style"]
             if param_style not in KNOWN_STYLES:
                 raise ValueError(
-                    'Unknown param_style "{}", available are: {}'.format(
-                        param_style, list(KNOWN_STYLES.keys())
-                    )
+                    f'Unknown param_style "{param_style}", available are: {list(KNOWN_STYLES.keys())}'
                 )
+
             live_context["__bind_param_regex"] = KNOWN_STYLES[param_style]
         else:
             raise ValueError(
@@ -155,9 +154,9 @@ class PlaceholderTemplater(RawTemplater):
             except KeyError as err:
                 # TODO: Add a url here so people can get more help.
                 raise SQLTemplaterError(
-                    "Failure in placeholder templating: {}. Have you configured your "
-                    "variables?".format(err)
+                    f"Failure in placeholder templating: {err}. Have you configured your variables?"
                 )
+
             # add the literal to the slices
             template_slices.append(
                 TemplatedFileSlice(

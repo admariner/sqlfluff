@@ -61,7 +61,7 @@ class MatchResult(
         # Clip the content if it's long.
         # The ends are the important bits.
         if len(content) > 32:
-            content = content[:15] + "..." + content[-15:]
+            content = f"{content[:15]}...{content[-15:]}"
         return "<MatchResult {}/{}: {!r}>".format(
             len(self.matched_segments),
             len(self.matched_segments) + len(self.unmatched_segments),
@@ -94,11 +94,7 @@ class MatchResult(
         else:
             is_iterable = True
 
-        if is_iterable:
-            return tuple(iterator)
-        else:  # pragma: no cover TODO?
-            # Blindly make into tuple here.
-            return (segs,)
+        return tuple(iterator) if is_iterable else (segs, )
 
     @classmethod
     def from_unmatched(cls, unmatched: Tuple["BaseSegment", ...]) -> "MatchResult":

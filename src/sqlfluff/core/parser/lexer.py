@@ -98,10 +98,7 @@ class StringLexer:
     def search(self, forward_string: str) -> Optional[Tuple[int, int]]:
         """Use string methods to find a substring."""
         loc = forward_string.find(self.template)
-        if loc >= 0:
-            return loc, loc + len(self.template)
-        else:
-            return None
+        return (loc, loc + len(self.template)) if loc >= 0 else None
 
     def _trim_match(self, matched_str: str) -> List[LexedElement]:
         """Given a string, trim if we are allowed to.
@@ -163,29 +160,26 @@ class StringLexer:
 
         """
         # Can we have to subdivide?
-        if self.subdivider:
-            # Yes subdivision
-            elem_buff: List[LexedElement] = []
-            str_buff = matched.raw
-            while str_buff:
-                # Iterate through subdividing as appropriate
-                div_pos = self.subdivider.search(str_buff)
-                if div_pos:
-                    # Found a division
-                    trimmed_elems = self._trim_match(str_buff[: div_pos[0]])
-                    div_elem = LexedElement(
-                        str_buff[div_pos[0] : div_pos[1]], self.subdivider
-                    )
-                    elem_buff += trimmed_elems + [div_elem]
-                    str_buff = str_buff[div_pos[1] :]
-                else:
-                    # No more division matches. Trim?
-                    trimmed_elems = self._trim_match(str_buff)
-                    elem_buff += trimmed_elems
-                    break
-            return elem_buff
-        else:
+        if not self.subdivider:
             return [matched]
+        # Yes subdivision
+        elem_buff: List[LexedElement] = []
+        str_buff = matched.raw
+        while str_buff:
+            if div_pos := self.subdivider.search(str_buff):
+                # Found a division
+                trimmed_elems = self._trim_match(str_buff[: div_pos[0]])
+                div_elem = LexedElement(
+                    str_buff[div_pos[0] : div_pos[1]], self.subdivider
+                )
+                elem_buff += trimmed_elems + [div_elem]
+                str_buff = str_buff[div_pos[1] :]
+            else:
+                # No more division matches. Trim?
+                trimmed_elems = self._trim_match(str_buff)
+                elem_buff += trimmed_elems
+                break
+        return elem_buff
 
     def match(self, forward_string: str) -> LexMatch:
         """Given a string, match what we can and return the rest.
@@ -194,11 +188,9 @@ class StringLexer:
             :obj:`LexMatch`
 
         """
-        if len(forward_string) == 0:  # pragma: no cover
+        if not forward_string:  # pragma: no cover
             raise ValueError("Unexpected empty string!")
-        matched = self._match(forward_string)
-
-        if matched:
+        if matched := self._match(forward_string):
             # Handle potential subdivision elsewhere.
             new_elements = self._subdivide(matched)
 
@@ -228,11 +220,8 @@ class RegexLexer(StringLexer):
 
     def _match(self, forward_string: str) -> Optional[LexedElement]:
         """Use regexes to match chunks."""
-        match = self._compiled_regex.match(forward_string)
-        if match:
-            # We can only match strings with length
-            match_str = match.group(0)
-            if match_str:
+        if match := self._compiled_regex.match(forward_string):
+            if match_str := match.group(0):
                 return LexedElement(match_str, self)
             else:
                 lexer_logger.warning(
@@ -243,8 +232,7 @@ class RegexLexer(StringLexer):
 
     def search(self, forward_string: str) -> Optional[Tuple[int, int]]:
         """Use regex to find a substring."""
-        match = self._compiled_regex.search(forward_string)
-        if match:
+        if match := self._compiled_regex.search(forward_string):
             # We can only match strings with length
             if match.group(0):
                 return match.span()
@@ -299,22 +287,22 @@ class Lexer:
         while True:
             res = self.lex_match(str_buff, self.lexer_matchers)
             element_buffer += res.elements
-            if res.forward_string:
-                resort_res = self.last_resort_lexer.match(res.forward_string)
-                if not resort_res:
-                    # If we STILL can't match, then just panic out.
-                    raise SQLLexError(
-                        f"Fatal. Unable to lex characters: {0!r}".format(
-                            res.forward_string[:10] + "..."
-                            if len(res.forward_string) > 9
-                            else res.forward_string
-                        )
-                    )
-                str_buff = resort_res.forward_string
-                element_buffer += resort_res.elements
-            else:  # pragma: no cover TODO?
+            if not res.forward_string:
                 break
 
+            resort_res = self.last_resort_lexer.match(res.forward_string)
+            if not resort_res:
+                    # If we STILL can't match, then just panic out.
+                raise SQLLexError(
+                    f"Fatal. Unable to lex characters: {0!r}".format(
+                        f"{res.forward_string[:10]}..."
+                        if len(res.forward_string) > 9
+                        else res.forward_string
+                    )
+                )
+
+            str_buff = resort_res.forward_string
+            element_buffer += resort_res.elements
         # Map tuple LexedElement to list of TemplateElement.
         # This adds the template_slice to the object.
         templated_buffer = self.map_template_slices(element_buffer, template)
@@ -410,11 +398,7 @@ class Lexer:
                 # For reasons which aren't entirely clear right now, if there is
                 # an included literal, it will always be at the end. Let's see if it's
                 # there.
-                if source_str.endswith(templ_str):
-                    existing_len = len(templ_str)
-                else:
-                    existing_len = 0
-
+                existing_len = len(templ_str) if source_str.endswith(templ_str) else 0
                 # Calculate slices
                 placeholder_slice = slice(
                     source_slice.start, source_slice.stop - existing_len
@@ -456,8 +440,7 @@ class Lexer:
                         # If it's not the first slice, was there a gap?
                         if last_slice:
                             end_last = last_slice.source_idx + len(last_slice.raw)
-                            chars_skipped = so_slice.source_idx - end_last
-                            if chars_skipped:
+                            if chars_skipped := so_slice.source_idx - end_last:
                                 # Yes, gap between last_slice and so_slice.
                                 has_gap = True
 
@@ -569,21 +552,21 @@ class Lexer:
                     for so in source_only_slices
                     if so.source_idx >= source_slice.stop
                 ]
-                for so_slice in so_slices:
-                    segment_buffer.append(
-                        TemplateSegment(
-                            pos_marker=PositionMarker(
-                                slice(so_slice.source_idx, so_slice.end_source_idx()),
-                                slice(
-                                    element.template_slice.stop,
-                                    element.template_slice.stop,
-                                ),
-                                templated_file,
+                segment_buffer.extend(
+                    TemplateSegment(
+                        pos_marker=PositionMarker(
+                            slice(so_slice.source_idx, so_slice.end_source_idx()),
+                            slice(
+                                element.template_slice.stop,
+                                element.template_slice.stop,
                             ),
-                            source_str=so_slice.raw,
-                            block_type=so_slice.slice_type,
-                        )
+                            templated_file,
+                        ),
+                        source_str=so_slice.raw,
+                        block_type=so_slice.slice_type,
                     )
+                    for so_slice in so_slices
+                )
 
         # Add an end of file marker
         segment_buffer.append(
@@ -600,20 +583,18 @@ class Lexer:
     @staticmethod
     def violations_from_segments(segments: Tuple[RawSegment, ...]) -> List[SQLLexError]:
         """Generate any lexing errors for any unlexables."""
-        violations = []
-        for segment in segments:
-            if segment.is_type("unlexable"):
-                violations.append(
-                    SQLLexError(
-                        "Unable to lex characters: {!r}".format(
-                            segment.raw[:10] + "..."
-                            if len(segment.raw) > 9
-                            else segment.raw
-                        ),
-                        pos=segment.pos_marker,
-                    )
-                )
-        return violations
+        return [
+            SQLLexError(
+                "Unable to lex characters: {!r}".format(
+                    f"{segment.raw[:10]}..."
+                    if len(segment.raw) > 9
+                    else segment.raw
+                ),
+                pos=segment.pos_marker,
+            )
+            for segment in segments
+            if segment.is_type("unlexable")
+        ]
 
     @staticmethod
     def lex_match(forward_string: str, lexer_matchers: List[StringLexer]) -> LexMatch:

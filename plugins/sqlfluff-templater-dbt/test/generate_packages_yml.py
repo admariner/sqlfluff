@@ -25,6 +25,5 @@ def main(project_dir):
         f.write(expanded)
 
 
-if __name__ == "__main__":
-    if DBT_VERSION_TUPLE is not None:
-        main(sys.argv[1])
+if __name__ == "__main__" and DBT_VERSION_TUPLE is not None:
+    main(sys.argv[1])

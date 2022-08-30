@@ -88,7 +88,7 @@ class _LineSummary:
         )
         is_empty_line = not has_code_segment and not has_placeholder
 
-        line_summary = self.__class__(
+        return self.__class__(
             line_no=line_no,
             templated_line=self.templated_line,
             line_buffer=copied_line_buffer,
@@ -108,7 +108,6 @@ class _LineSummary:
             is_empty_line=is_empty_line,
             has_code_segment=has_code_segment,
         )
-        return line_summary
 
 
 def _set_line_anchor(
@@ -256,9 +255,7 @@ class Rule_L003(BaseRule):
 
             working_state.line_buffer.append(elem)
             # Pin indent_balance to above zero
-            if working_state.indent_balance < 0:
-                working_state.indent_balance = 0
-
+            working_state.indent_balance = max(working_state.indent_balance, 0)
             if is_newline:
                 result_buffer[line_no] = working_state.finalise(line_no, templated_file)
                 # Set the "templated_line" if the newline that ended the *current* line
@@ -358,22 +355,21 @@ class Rule_L003(BaseRule):
             for elem in current_indent_buffer
             if not elem.is_type("indent")
         ]
-        if len(desired_indent) == 0:
-            # If there shouldn't be an indent at all, just delete.
-            return fixes
-
-        # Anything other than 0 create a fresh buffer
-        return [
-            LintFix.create_before(
-                current_anchor,
-                [
-                    WhitespaceSegment(
-                        raw=desired_indent,
-                    ),
-                ],
-            ),
-            *fixes,
-        ]
+        return (
+            [
+                LintFix.create_before(
+                    current_anchor,
+                    [
+                        WhitespaceSegment(
+                            raw=desired_indent,
+                        ),
+                    ],
+                ),
+                *fixes,
+            ]
+            if desired_indent
+            else fixes
+        )
 
     def _eval(self, context: RuleContext) -> Optional[LintResult]:
         """Indentation not consistent with previous lines.
@@ -485,11 +481,9 @@ class Rule_L003(BaseRule):
         # we will iterate this more than once
         previous_lines = list(map(lambda k: line_summaries[k], previous_line_numbers))
 
-        # handle hanging indents if allowed
-        hanger_res = self.hanging_indents and self._handle_hanging_indents(
+        if hanger_res := self.hanging_indents and self._handle_hanging_indents(
             this_line, previous_lines, memory
-        )
-        if hanger_res:
+        ):
             return hanger_res
 
         # Is this an indented first line?
@@ -737,14 +731,15 @@ class Rule_L003(BaseRule):
 
                 memory.problem_lines.add(n)
 
-        if not fixes:
-            return None
-
-        return LintResult(
-            anchor=anchor,
-            memory=memory,
-            description="Comment not aligned with following line.",
-            fixes=fixes,
+        return (
+            LintResult(
+                anchor=anchor,
+                memory=memory,
+                description="Comment not aligned with following line.",
+                fixes=fixes,
+            )
+            if fixes
+            else None
         )
 
     def _handle_hanging_indents(
@@ -753,7 +748,7 @@ class Rule_L003(BaseRule):
         previous_lines: List[_LineSummary],
         memory: _Memory,
     ) -> Optional[LintResult]:
-        if len(previous_lines) == 0:
+        if not previous_lines:
             return None
 
         last_line = _find_last_meaningful_line(previous_lines)
@@ -942,10 +937,7 @@ class _TemplateLineInterpreter:
         if self.is_block_end():
             return "end"
 
-        if self.is_block_start():
-            return "start"
-
-        return None
+        return "start" if self.is_block_start() else None
 
     def get_raw_slices(self, elem: BaseSegment) -> Optional[List[RawFileSlice]]:
         if not self.templated_file:  # pragma: no cover
@@ -982,12 +974,12 @@ def _segment_length(elem: BaseSegment, tab_space_size: int):
         assert elem.pos_marker
         templated_file = elem.pos_marker.templated_file
         # Extract the leading literal whitespace, slice by slice.
-        raw = ""
-        for raw_slice in Segments(
-            elem, templated_file=templated_file
-        ).raw_slices.select(loop_while=rsp.is_slice_type("literal")):
-            # Compute and append raw_slice's contribution.
-            raw += sp.raw_slice(elem, raw_slice)
+        raw = "".join(
+            sp.raw_slice(elem, raw_slice)
+            for raw_slice in Segments(
+                elem, templated_file=templated_file
+            ).raw_slices.select(loop_while=rsp.is_slice_type("literal"))
+        )
 
     # convert to spaces for convenience (and hanging indents)
     return raw.replace("\t", " " * tab_space_size)
@@ -1004,12 +996,7 @@ def _indent_size(segments: Sequence[BaseSegment], tab_space_size: int = 4) -> in
 def _find_last_meaningful_line(
     previous_lines: List[_LineSummary],
 ) -> Optional[_LineSummary]:
-    # Find last meaningful line indent.
-    for line in previous_lines:
-        if line.has_code_segment:
-            return line
-
-    return None
+    return next((line for line in previous_lines if line.has_code_segment), None)
 
 
 def _find_previous_line(

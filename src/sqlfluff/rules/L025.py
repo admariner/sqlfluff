@@ -143,8 +143,7 @@ class Rule_L025(BaseRule):
     def _analyze_table_aliases(cls, query: L025Query, dialect: Dialect):
         # Get table aliases defined in query.
         for selectable in query.selectables:
-            select_info = selectable.select_info
-            if select_info:
+            if select_info := selectable.select_info:
                 # Record the aliases.
                 query.aliases += select_info.table_aliases
 

@@ -50,10 +50,9 @@ class Rule_L017(BaseRule):
         function_name = children.first(sp.is_type("function_name"))[0]
         start_bracket = children.first(sp.is_type("bracketed"))[0]
 
-        intermediate_segments = children.select(
+        if intermediate_segments := children.select(
             start_seg=function_name, stop_seg=start_bracket
-        )
-        if intermediate_segments:
+        ):
             # It's only safe to fix if there is only whitespace
             # or newlines in the intervening section.
             if intermediate_segments.all(sp.is_type("whitespace", "newline")):

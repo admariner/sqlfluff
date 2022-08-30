@@ -380,10 +380,7 @@ def get_linter_and_formatter(
 ) -> Tuple[Linter, OutputStreamFormatter]:
     """Get a linter object given a config."""
     try:
-        # We're just making sure it exists at this stage.
-        # It will be fetched properly in the linter.
-        dialect = cfg.get("dialect")
-        if dialect:
+        if dialect := cfg.get("dialect"):
             dialect_selector(dialect)
     except KeyError:  # pragma: no cover
         click.echo(f"Error: Unknown dialect '{cfg.get('dialect')}'")
@@ -598,22 +595,19 @@ def lint(
         github_result = []
         for record in result.as_records():
             filepath = record["filepath"]
-            for violation in record["violations"]:
-                # NOTE: The output format is designed for this GitHub action:
-                # https://github.com/yuzutech/annotations-action
-                # It is similar, but not identical, to the native GitHub format:
-                # https://docs.github.com/en/rest/reference/checks#annotations-items
-                github_result.append(
-                    {
-                        "file": filepath,
-                        "line": violation["line_no"],
-                        "start_column": violation["line_pos"],
-                        "end_column": violation["line_pos"],
-                        "title": "SQLFluff",
-                        "message": f"{violation['code']}: {violation['description']}",
-                        "annotation_level": annotation_level,
-                    }
-                )
+            github_result.extend(
+                {
+                    "file": filepath,
+                    "line": violation["line_no"],
+                    "start_column": violation["line_pos"],
+                    "end_column": violation["line_pos"],
+                    "title": "SQLFluff",
+                    "message": f"{violation['code']}: {violation['description']}",
+                    "annotation_level": annotation_level,
+                }
+                for violation in record["violations"]
+            )
+
         file_output = json.dumps(github_result)
     elif format == FormatType.github_annotation_native.value:
         if annotation_level == "failure":
@@ -857,17 +851,16 @@ def fix(
             click.echo("...")
             if c in ("y", "\r", "\n"):
                 click.echo("Attempting fixes...")
-                success = do_fixes(
+                if success := do_fixes(
                     lnt,
                     result,
                     formatter,
                     types=SQLLintError,
                     fixed_file_suffix=fixed_suffix,
-                )
-                if not success:
-                    sys.exit(EXIT_FAIL)  # pragma: no cover
-                else:
+                ):
                     formatter.completion_message()
+                else:
+                    sys.exit(EXIT_FAIL)  # pragma: no cover
             elif c == "n":
                 click.echo("Aborting...")
                 exit_code = EXIT_FAIL
@@ -1031,7 +1024,7 @@ def parse(
 
     # handle stdin if specified via lone '-'
     with PathAndUserErrorHandler(formatter, path):
-        if "-" == path:
+        if path == "-":
             parsed_strings = [
                 lnt.parse_string(
                     sys.stdin.read(),

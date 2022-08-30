@@ -123,9 +123,7 @@ class StringParser(BaseParser):
         """Does the segment provided match according to the current rules."""
         # Is the target a match and IS IT CODE.
         # The latter stops us accidentally matching comments.
-        if self.template == segment.raw_upper and segment.is_code:
-            return True
-        return False
+        return bool(self.template == segment.raw_upper and segment.is_code)
 
 
 class MultiStringParser(BaseParser):
@@ -163,9 +161,7 @@ class MultiStringParser(BaseParser):
         """Does the segment provided match according to the current rules."""
         # Is the target a match and IS IT CODE.
         # The latter stops us accidentally matching comments.
-        if segment.is_code and segment.raw_upper in self.templates:
-            return True
-        return False
+        return bool(segment.is_code and segment.raw_upper in self.templates)
 
 
 class NamedParser(BaseParser):
@@ -189,7 +185,7 @@ class NamedParser(BaseParser):
             **segment_kwargs,
         )
 
-    def simple(cls, parse_context: ParseContext, crumbs=None) -> Optional[List[str]]:
+    def simple(self, parse_context: ParseContext, crumbs=None) -> Optional[List[str]]:
         """Does this matcher support a uppercase hash matching route?
 
         NamedParser segment does NOT for now. We might need to later for efficiency.
@@ -208,9 +204,7 @@ class NamedParser(BaseParser):
         """
         # Case sensitivity is not supported. Names are all
         # lowercase by convention.
-        if self.template == segment.name.lower():
-            return True
-        return False
+        return self.template == segment.name.lower()
 
 
 class RegexParser(BaseParser):
@@ -240,7 +234,7 @@ class RegexParser(BaseParser):
             **segment_kwargs,
         )
 
-    def simple(cls, parse_context: ParseContext, crumbs=None) -> Optional[List[str]]:
+    def simple(self, parse_context: ParseContext, crumbs=None) -> Optional[List[str]]:
         """Does this matcher support a uppercase hash matching route?
 
         Regex segment does NOT for now. We might need to later for efficiency.
@@ -258,15 +252,13 @@ class RegexParser(BaseParser):
             # If it's of zero length it's probably a meta segment.
             # In any case, it won't match here.
             return False
-        # Try the regex. Case sensitivity is not supported.
-        result = self._template.match(segment.raw_upper)
-        if result:
+        if result := self._template.match(segment.raw_upper):
             result_string = result.group(0)
             # Check that we've fully matched
             if result_string == segment.raw_upper:
                 # Check that the anti_template (if set) hasn't also matched
-                if self.anti_template and self._anti_template.match(segment.raw_upper):
-                    return False
-                else:
-                    return True
+                return not self.anti_template or not self._anti_template.match(
+                    segment.raw_upper
+                )
+
         return False

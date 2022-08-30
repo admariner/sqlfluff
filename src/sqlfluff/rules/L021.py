@@ -46,13 +46,11 @@ class Rule_L021(BaseRule):
         assert segment.all(sp.is_type("select_statement"))
         # Do we have a group by clause
         if segment.children(sp.is_type("groupby_clause")):
-            # Do we have the "DISTINCT" keyword in the select clause
-            distinct = (
+            if distinct := (
                 segment.children(sp.is_type("select_clause"))
                 .children(sp.is_type("select_clause_modifier"))
                 .children(sp.is_type("keyword"))
                 .select(sp.is_name("distinct"))
-            )
-            if distinct:
+            ):
                 return LintResult(anchor=distinct[0])
         return None

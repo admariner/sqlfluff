@@ -317,10 +317,11 @@ def test__dbt_templated_models_fix_does_not_corrupt_file(
         lnt = lntr.lint_path(os.path.join(project_dir, path), fix=True)
     try:
         lnt.persist_changes(fixed_file_suffix="FIXED")
-        with open(os.path.join(project_dir, path + ".after")) as f:
-            comp_buff = f.read()
-        with open(os.path.join(project_dir, path.replace(".sql", "FIXED.sql"))) as f:
-            fixed_buff = f.read()
+        comp_buff = Path(os.path.join(project_dir, f"{path}.after")).read_text()
+        fixed_buff = Path(
+            os.path.join(project_dir, path.replace(".sql", "FIXED.sql"))
+        ).read_text()
+
         assert fixed_buff == comp_buff
     finally:
         _clean_path(test_glob)
@@ -359,7 +360,8 @@ def test__templater_dbt_handle_exceptions(
     """Test that exceptions during compilation are returned as violation."""
     from dbt.adapters.factory import get_adapter
 
-    src_fpath = "plugins/sqlfluff-templater-dbt/test/fixtures/dbt/error_models/" + fname
+    src_fpath = f"plugins/sqlfluff-templater-dbt/test/fixtures/dbt/error_models/{fname}"
+
     target_fpath = os.path.abspath(
         os.path.join(project_dir, "models/my_new_project/", fname)
     )

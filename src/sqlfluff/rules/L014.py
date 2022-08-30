@@ -27,9 +27,7 @@ def identifiers_policy_applicable(
     if policy == "aliases" and is_alias:
         return True
     is_inside_from = any(p.is_type("from_clause") for p in parent_stack)
-    if policy == "column_aliases" and is_alias and not is_inside_from:
-        return True
-    return False
+    return bool(policy == "column_aliases" and is_alias and not is_inside_from)
 
 
 @document_groups

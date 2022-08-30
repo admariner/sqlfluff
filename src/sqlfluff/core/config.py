@@ -38,11 +38,11 @@ def coerce_value(val: str) -> Any:
             v = float(val)
         except ValueError:
             cleaned_val = val.strip().lower()
-            if cleaned_val in ["true"]:
+            if cleaned_val in {"true"}:
                 v = True
-            elif cleaned_val in ["false"]:
+            elif cleaned_val in {"false"}:
                 v = False
-            elif cleaned_val in ["none"]:
+            elif cleaned_val in {"none"}:
                 v = None
             else:
                 v = val
@@ -111,16 +111,11 @@ def dict_diff(left: dict, right: dict, ignore: Optional[List[str]] = None) -> di
         # Is the key there at all?
         if k not in right:
             buff[k] = left[k]
-        # Is the content the same?
         elif left[k] == right[k]:
             continue
-        # If it's not the same but both are dicts, then compare
         elif isinstance(left[k], dict) and isinstance(right[k], dict):
-            diff = dict_diff(left[k], right[k], ignore=ignore)
-            # Only if the difference is not ignored it do we include it.
-            if diff:
+            if diff := dict_diff(left[k], right[k], ignore=ignore):
                 buff[k] = diff
-        # It's just different
         else:
             buff[k] = left[k]
     return buff
@@ -196,8 +191,7 @@ class ConfigLoader:
         """
         buff: List[Tuple[tuple, Any]] = []
         # Disable interpolation so we can load macros
-        kw: Dict = {}
-        kw["interpolation"] = None
+        kw: Dict = {"interpolation": None}
         config = configparser.ConfigParser(**kw)
         # NB: We want to be case sensitive in how we read from files,
         # because jinja is also case sensitive. To do this we override
@@ -224,9 +218,7 @@ class ConfigLoader:
                 if name.lower() == "load_macros_from_path":
                     # Comma-separated list of paths.
                     paths = _split_comma_separated_string(val)
-                    v_temp = []
-                    for path in paths:
-                        v_temp.append(cls._resolve_path(fpath, path))
+                    v_temp = [cls._resolve_path(fpath, path) for path in paths]
                     v = ",".join(v_temp)
                 elif name.lower().endswith(("_path", "_dir")):
                     # One path
@@ -278,8 +270,8 @@ class ConfigLoader:
     def load_config_at_path(self, path: str) -> dict:
         """Load config from a given path."""
         # First check the cache
-        if str(path) in self._config_cache:
-            return self._config_cache[str(path)]
+        if path in self._config_cache:
+            return self._config_cache[path]
 
         # The potential filenames we would look for at this path.
         # NB: later in this list overwrites earlier
@@ -293,11 +285,7 @@ class ConfigLoader:
 
         configs: dict = {}
 
-        if os.path.isdir(path):
-            p = path
-        else:
-            p = os.path.dirname(path)
-
+        p = path if os.path.isdir(path) else os.path.dirname(path)
         d = os.listdir(os.path.expanduser(p))
         # iterate this way round to make sure things overwrite is the right direction
         for fname in filename_options:
@@ -309,7 +297,7 @@ class ConfigLoader:
                 configs = self._incorporate_vals(configs, elems)
 
         # Store in the cache
-        self._config_cache[str(path)] = configs
+        self._config_cache[path] = configs
         return configs
 
     def load_extra_config(self, extra_config_path: str) -> dict:
@@ -320,8 +308,8 @@ class ConfigLoader:
             )
 
         # First check the cache
-        if str(extra_config_path) in self._config_cache:
-            return self._config_cache[str(extra_config_path)]
+        if extra_config_path in self._config_cache:
+            return self._config_cache[extra_config_path]
 
         configs: dict = {}
         if extra_config_path.endswith("pyproject.toml"):
@@ -331,7 +319,7 @@ class ConfigLoader:
         configs = self._incorporate_vals(configs, elems)
 
         # Store in the cache
-        self._config_cache[str(extra_config_path)] = configs
+        self._config_cache[extra_config_path] = configs
         return configs
 
     @staticmethod
@@ -373,19 +361,22 @@ class ConfigLoader:
     ) -> dict:
         """Loads a selection of config files from both the path and its parent paths."""
         user_appdir_config = (
-            self.load_user_appdir_config() if not ignore_local_config else {}
+            {} if ignore_local_config else self.load_user_appdir_config()
         )
-        user_config = self.load_user_config() if not ignore_local_config else {}
+
+        user_config = {} if ignore_local_config else self.load_user_config()
         config_paths = (
-            self.iter_config_locations_up_to_path(path)
-            if not ignore_local_config
-            else {}
+            {}
+            if ignore_local_config
+            else self.iter_config_locations_up_to_path(path)
         )
+
         config_stack = (
-            [self.load_config_at_path(p) for p in config_paths]
-            if not ignore_local_config
-            else []
+            []
+            if ignore_local_config
+            else [self.load_config_at_path(p) for p in config_paths]
         )
+
         extra_config = (
             self.load_extra_config(extra_config_path) if extra_config_path else {}
         )
@@ -694,10 +685,7 @@ class FluffConfig:
     ):
         """Get a particular value from the config."""
         section_dict = self.get_section(section)
-        if section_dict is None:
-            return default
-
-        return section_dict.get(val, default)
+        return default if section_dict is None else section_dict.get(val, default)
 
     def get_section(self, section: Union[str, Iterable[str]]) -> Any:
         """Return a whole section of config as a dict.
@@ -715,14 +703,13 @@ class FluffConfig:
         """
         if isinstance(section, str):
             return self._configs.get(section, None)
-        else:
-            # Try iterating
-            buff = self._configs
-            for sec in section:
-                buff = buff.get(sec, None)
-                if buff is None:
-                    return None
-            return buff
+        # Try iterating
+        buff = self._configs
+        for sec in section:
+            buff = buff.get(sec, None)
+            if buff is None:
+                return None
+        return buff
 
     def set_value(self, config_path: Iterable[str], val: Any):
         """Set a value at a given path."""
@@ -735,8 +722,7 @@ class FluffConfig:
             config_path = ["core"] + config_path
         # Current section:
         dict_buff = [self._configs]
-        for elem in config_path[:-1]:
-            dict_buff.append(dict_buff[-1][elem])
+        dict_buff.extend(dict_buff[-1][elem] for elem in config_path[:-1])
         # Set the value
         dict_buff[-1][config_path[-1]] = config_val
         # Rebuild the config

@@ -105,9 +105,7 @@ class Linter:
         """Load a raw file and the associated config."""
         file_config = root_config.make_child_from_path(fname)
         encoding = get_encoding(fname=fname, config=file_config)
-        # Check file size before loading.
-        limit = file_config.get("large_file_skip_byte_limit")
-        if limit:
+        if limit := file_config.get("large_file_skip_byte_limit"):
             # Get the file size
             file_size = os.path.getsize(fname)
             if file_size > limit:
@@ -188,10 +186,8 @@ class Linter:
         for token in cast(Tuple[BaseSegment, ...], tokens):
             if token.is_meta:
                 token = cast(MetaSegment, token)
-                if token.indent_val != 0:
-                    # Don't allow it if we're not linting templating block indents.
-                    if not templating_blocks_indent:
-                        continue
+                if token.indent_val != 0 and not templating_blocks_indent:
+                    continue
             new_tokens.append(token)
 
         # Return new buffer
@@ -219,7 +215,7 @@ class Linter:
             return None, violations
 
         if parsed:
-            linter_logger.info("\n###\n#\n# {}\n#\n###".format("Parsed Tree:"))
+            linter_logger.info(f"\n###\n#\n# Parsed Tree:\n#\n###")
             linter_logger.info("\n" + parsed.stringify())
             # We may succeed parsing, but still have unparsable segments. Extract them
             # here.
@@ -228,16 +224,19 @@ class Linter:
                 # so that we can use the common interface
                 violations.append(
                     SQLParseError(
-                        "Line {0[0]}, Position {0[1]}: Found unparsable section: "
-                        "{1!r}".format(
-                            unparsable.pos_marker.working_loc,
-                            unparsable.raw
-                            if len(unparsable.raw) < 40
-                            else unparsable.raw[:40] + "...",
+                        (
+                            "Line {0[0]}, Position {0[1]}: Found unparsable section: "
+                            "{1!r}".format(
+                                unparsable.pos_marker.working_loc,
+                                unparsable.raw
+                                if len(unparsable.raw) < 40
+                                else f"{unparsable.raw[:40]}...",
+                            )
                         ),
                         segment=unparsable,
                     )
                 )
+
                 linter_logger.info("Found unparsable segment...")
                 linter_logger.info(unparsable.stringify())
         return parsed, violations
@@ -266,53 +265,52 @@ class Linter:
                         line_no=line_no,
                     )
                 comment_remainder = comment_remainder[1:].strip()
-                if comment_remainder:
-                    action: Optional[str]
-                    if "=" in comment_remainder:
-                        action, rule_part = comment_remainder.split("=", 1)
-                        if action not in {"disable", "enable"}:  # pragma: no cover
-                            return SQLParseError(
-                                "Malformed 'noqa' section. "
-                                "Expected 'noqa: enable=<rule>[,...] | all' "
-                                "or 'noqa: disable=<rule>[,...] | all",
-                                line_no=line_no,
-                            )
-                    else:
-                        action = None
-                        rule_part = comment_remainder
-                        if rule_part in {"disable", "enable"}:
-                            return SQLParseError(
-                                "Malformed 'noqa' section. "
-                                "Expected 'noqa: enable=<rule>[,...] | all' "
-                                "or 'noqa: disable=<rule>[,...] | all",
-                                line_no=line_no,
-                            )
-                    rules: Optional[Tuple[str, ...]]
-                    if rule_part != "all":
-                        # Rules can be globs therefore we compare to the rule_set to
-                        # expand the globs.
-                        unexpanded_rules = tuple(
-                            r.strip() for r in rule_part.split(",")
+            if comment_remainder:
+                action: Optional[str]
+                if "=" in comment_remainder:
+                    action, rule_part = comment_remainder.split("=", 1)
+                    if action not in {"disable", "enable"}:  # pragma: no cover
+                        return SQLParseError(
+                            "Malformed 'noqa' section. "
+                            "Expected 'noqa: enable=<rule>[,...] | all' "
+                            "or 'noqa: disable=<rule>[,...] | all",
+                            line_no=line_no,
                         )
-                        expanded_rules = []
-                        for r in unexpanded_rules:
-                            expanded_rule = [
-                                x
-                                for x in fnmatch.filter(rule_codes, r)
-                                if x not in expanded_rules
-                            ]
-                            if expanded_rule:
-                                expanded_rules.extend(expanded_rule)
-                            elif r not in expanded_rules:
-                                # We were unable to expand the glob.
-                                # Therefore assume the user is referencing
-                                # a special error type (e.g. PRS, LXR, or TMP)
-                                # and add this to the list of rules to ignore.
-                                expanded_rules.append(r)
-                        rules = tuple(expanded_rules)
-                    else:
-                        rules = None
-                    return NoQaDirective(line_no, rules, action)
+                else:
+                    action = None
+                    rule_part = comment_remainder
+                    if rule_part in {"disable", "enable"}:
+                        return SQLParseError(
+                            "Malformed 'noqa' section. "
+                            "Expected 'noqa: enable=<rule>[,...] | all' "
+                            "or 'noqa: disable=<rule>[,...] | all",
+                            line_no=line_no,
+                        )
+                rules: Optional[Tuple[str, ...]]
+                if rule_part != "all":
+                    # Rules can be globs therefore we compare to the rule_set to
+                    # expand the globs.
+                    unexpanded_rules = tuple(
+                        r.strip() for r in rule_part.split(",")
+                    )
+                    expanded_rules = []
+                    for r in unexpanded_rules:
+                        if expanded_rule := [
+                            x
+                            for x in fnmatch.filter(rule_codes, r)
+                            if x not in expanded_rules
+                        ]:
+                            expanded_rules.extend(expanded_rule)
+                        elif r not in expanded_rules:
+                            # We were unable to expand the glob.
+                            # Therefore assume the user is referencing
+                            # a special error type (e.g. PRS, LXR, or TMP)
+                            # and add this to the list of rules to ignore.
+                            expanded_rules.append(r)
+                    rules = tuple(expanded_rules)
+                else:
+                    rules = None
+                return NoQaDirective(line_no, rules, action)
             return NoQaDirective(line_no, None, None)
         return None
 
@@ -733,11 +731,13 @@ class Linter:
             )
 
         # Safety flag for unset dialects
-        if linted_file.get_violations(
-            fixable=True if fix else None, types=SQLParseError
+        if (
+            linted_file.get_violations(
+                fixable=True if fix else None, types=SQLParseError
+            )
+            and formatter
         ):
-            if formatter:  # pragma: no cover TODO?
-                formatter.dispatch_dialect_warning(parsed.config.get("dialect"))
+            formatter.dispatch_dialect_warning(parsed.config.get("dialect"))
 
         return linted_file
 
@@ -782,7 +782,7 @@ class Linter:
         # not going to pick up a .sqlfluff or other config file to provide a
         # missing dialect at this point.)
         config.verify_dialect_specified()
-        if not config.get("templater_obj") == self.templater:
+        if config.get("templater_obj") != self.templater:
             linter_logger.warning(
                 (
                     f"Attempt to set templater to {config.get('templater_obj').name} "
@@ -1006,12 +1006,15 @@ class Linter:
                 # that the ignore file is processed after the sql file.
 
                 # Scan for remaining files
-                for ext in (
-                    self.config.get("sql_file_exts", default=".sql").lower().split(",")
-                ):
-                    # is it a sql file?
-                    if fname.lower().endswith(ext):
-                        buffer.append(fpath)
+                buffer.extend(
+                    fpath
+                    for ext in (
+                        self.config.get("sql_file_exts", default=".sql")
+                        .lower()
+                        .split(",")
+                    )
+                    if fname.lower().endswith(ext)
+                )
 
         if not ignore_files:
             return sorted(buffer)

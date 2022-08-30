@@ -90,7 +90,7 @@ def lint(
     result = linter.lint_string_wrapped(sql)
     result_records = result.as_records()
     # Return just the violations for this file
-    return [] if not result_records else result_records[0]["violations"]
+    return result_records[0]["violations"] if result_records else []
 
 
 def fix(
@@ -168,6 +168,4 @@ def parse(
     if parsed.violations:
         raise APIParsingError(parsed.violations)
     # Return a JSON representation of the parse tree.
-    if parsed.tree is None:  # pragma: no cover
-        return {}
-    return parsed.tree.as_record(show_raw=True)
+    return {} if parsed.tree is None else parsed.tree.as_record(show_raw=True)

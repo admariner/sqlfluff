@@ -58,6 +58,8 @@ class Rule_L016(Rule_L003):
         chunk_buff = []
         indent_section = None
 
+
+
         class Section:
             def __init__(
                 self,
@@ -97,12 +99,12 @@ class Rule_L016(Rule_L003):
                 raise ValueError("Segment not found")  # pragma: no cover
 
             def generate_fixes_to_coerce(
-                self,
-                segments: List[RawSegment],
-                indent_section: "Section",
-                crawler: Rule_L016,
-                indent: int,
-            ) -> List[LintFix]:
+                        self,
+                        segments: List[RawSegment],
+                        indent_section: "Section",
+                        crawler: Rule_L016,
+                        indent: int,
+                    ) -> List[LintFix]:
                 """Generate a list of fixes to create a break at this point.
 
                 The `segments` argument is necessary to extract anchors
@@ -147,9 +149,11 @@ class Rule_L016(Rule_L003):
                         )
 
                     # Remove any existing whitespace
-                    for elem in self.segments:
-                        if not elem.is_meta and elem.is_type("whitespace"):
-                            fixes.append(LintFix.delete(elem))
+                    fixes.extend(
+                        LintFix.delete(elem)
+                        for elem in self.segments
+                        if not elem.is_meta and elem.is_type("whitespace")
+                    )
 
                     # Create a newline and a similar indent
                     fixes.append(
@@ -168,9 +172,12 @@ class Rule_L016(Rule_L003):
                     # the info in this segment only?
 
                     # Remove anything which is already here
-                    for elem in self.segments:
-                        if not elem.is_meta:
-                            fixes.append(LintFix.delete(elem))
+                    fixes.extend(
+                        LintFix.delete(elem)
+                        for elem in self.segments
+                        if not elem.is_meta
+                    )
+
                     # Create a newline, create an indent of the relevant size
                     fixes.append(
                         LintFix.create_before(
@@ -185,6 +192,7 @@ class Rule_L016(Rule_L003):
                 raise ValueError(
                     f"Unexpected break generated at {self}"
                 )  # pragma: no cover
+
 
         segment_buff: Tuple[RawSegment, ...] = ()
         whitespace_buff: Tuple[RawSegment, ...] = ()
@@ -205,18 +213,62 @@ class Rule_L016(Rule_L003):
                     )
                     whitespace_buff = ()
                     segment_buff = (seg,)
+            elif seg.is_type("whitespace"):
+                whitespace_buff += (seg,)
+                if seg.is_meta:
+                    indent_impulse += seg.indent_val
+            elif seg.is_meta:
+                whitespace_buff += (seg,)
+                indent_impulse += seg.indent_val
             else:
-                if seg.is_type("whitespace") or seg.is_meta:
-                    whitespace_buff += (seg,)
-                    if seg.is_meta:
-                        indent_impulse += seg.indent_val
+                # We got something other than whitespace or a meta.
+                # Have we passed an indent?
+                if indent_impulse != 0:
+                    # Yes. Bank the section, perhaps also with a content
+                    # section.
+                    if segment_buff:
+                        chunk_buff.append(
+                            Section(
+                                segments=segment_buff,
+                                role="content",
+                                indent_balance=indent_balance,
+                            )
+                        )
+                        segment_buff = ()
+                    # Deal with the whitespace
+                    chunk_buff.append(
+                        Section(
+                            segments=whitespace_buff,
+                            role="breakpoint",
+                            indent_balance=indent_balance,
+                            indent_impulse=indent_impulse,
+                        )
+                    )
+                    whitespace_buff = ()
+                    indent_balance += indent_impulse
+                    indent_impulse = 0
+
+                    # Did we think we were in a pause?
+                    # TODO: Renable binary operator breaks some time in future.
+                if is_pause:
+                    # We need to end the comma/operator
+                    # (taking any whitespace with it).
+                    chunk_buff.append(
+                        Section(
+                            segments=segment_buff + whitespace_buff,
+                            role="pausepoint",
+                            indent_balance=indent_balance,
+                        )
+                    )
+                    segment_buff = (seg,)
+                    is_pause = False
                 else:
-                    # We got something other than whitespace or a meta.
-                    # Have we passed an indent?
-                    if indent_impulse != 0:
-                        # Yes. Bank the section, perhaps also with a content
-                        # section.
+                        # We're not in a pause (or not in a pause yet)
+                    if seg.is_type("comma"):  # or seg.is_type('binary_operator')
                         if segment_buff:
+                            # End the previous section, start a comma/operator.
+                            # Any whitespace is added to the segment
+                            # buff to go with the comma.
                             chunk_buff.append(
                                 Section(
                                     segments=segment_buff,
@@ -225,62 +277,13 @@ class Rule_L016(Rule_L003):
                                 )
                             )
                             segment_buff = ()
-                        # Deal with the whitespace
-                        chunk_buff.append(
-                            Section(
-                                segments=whitespace_buff,
-                                role="breakpoint",
-                                indent_balance=indent_balance,
-                                indent_impulse=indent_impulse,
-                            )
-                        )
-                        whitespace_buff = ()
-                        indent_balance += indent_impulse
-                        indent_impulse = 0
 
-                    # Did we think we were in a pause?
-                    # TODO: Renable binary operator breaks some time in future.
-                    if is_pause:
-                        # We need to end the comma/operator
-                        # (taking any whitespace with it).
-                        chunk_buff.append(
-                            Section(
-                                segments=segment_buff + whitespace_buff,
-                                role="pausepoint",
-                                indent_balance=indent_balance,
-                            )
-                        )
-                        # Start the segment buffer off with this section.
-                        whitespace_buff = ()
-                        segment_buff = (seg,)
-                        is_pause = False
-                    else:
-                        # We're not in a pause (or not in a pause yet)
-                        if seg.is_type("comma"):  # or seg.is_type('binary_operator')
-                            if segment_buff:
-                                # End the previous section, start a comma/operator.
-                                # Any whitespace is added to the segment
-                                # buff to go with the comma.
-                                chunk_buff.append(
-                                    Section(
-                                        segments=segment_buff,
-                                        role="content",
-                                        indent_balance=indent_balance,
-                                    )
-                                )
-                                segment_buff = ()
-
-                            # Having a double comma should be impossible
-                            # but let's deal with that case regardless.
-                            segment_buff += whitespace_buff + (seg,)
-                            whitespace_buff = ()
-                            is_pause = True
-                        else:
-                            # Not in a pause, it's not a comma, were in
-                            # some content.
-                            segment_buff += whitespace_buff + (seg,)
-                            whitespace_buff = ()
-
+                        is_pause = True
+                    # Having a double comma should be impossible
+                    # but let's deal with that case regardless.
+                    segment_buff += whitespace_buff + (seg,)
+                # Start the segment buffer off with this section.
+                whitespace_buff = ()
         # We're at the end, do we have anything left?
         if is_pause:
             role = "pausepoint"
@@ -313,9 +316,6 @@ class Rule_L016(Rule_L003):
                 if sec.indent_balance == 0 and sec.indent_impulse < 0:
                     split_at = [(sec, -1)]
                     break
-        # Assuming we never go negative, we'll either use a pause
-        # point in the base indent balance, or we'll split out
-        # a section or two using the lowest breakpoints.
         else:
             # Look for low level pauses. Additionally, ignore
             # them if they're a comma at the end of the line,
@@ -348,17 +348,15 @@ class Rule_L016(Rule_L003):
                     return []
                 # First up break
                 split_at = [(upbreaks[0], 1)]
-                downbreaks = [
+                if downbreaks := [
                     sec
                     for sec in chunk_buff
                     if sec.role == "breakpoint"
                     and sec.indent_balance + sec.indent_impulse == 0
                     and sec.indent_impulse < 0
-                ]
-                # First down break where we reach the base
-                if downbreaks:
+                ]:
                     split_at.append((downbreaks[0], 0))
-                # If no downbreaks then the corresponding downbreak isn't on this line.
+                        # If no downbreaks then the corresponding downbreak isn't on this line.
 
         self.logger.info("Split at: %s", split_at)
 
@@ -384,16 +382,12 @@ class Rule_L016(Rule_L003):
         """
         working_buff: List[RawSegment] = []
         idx = -1
-        while True:
-            if len(raw_stack) >= abs(idx):
-                s = raw_stack[idx]
-                if s.is_type("newline"):
-                    break
-                else:
-                    working_buff.insert(0, s)
-                    idx -= 1
-            else:
-                break  # pragma: no cover
+        while len(raw_stack) >= abs(idx):
+            s = raw_stack[idx]
+            if s.is_type("newline"):
+                break
+            working_buff.insert(0, s)
+            idx -= 1
         return working_buff
 
     @classmethod
@@ -413,12 +407,10 @@ class Rule_L016(Rule_L003):
             # so doesn't suffer from the same bug, so we can ignore these
             return 0
 
-        # Compute the length of this segments in SOURCE space (before template
-        # expansion).
-        slice_length = (
-            segment.pos_marker.source_slice.stop - segment.pos_marker.source_slice.start
-        )
-        if slice_length:
+        if slice_length := (
+            segment.pos_marker.source_slice.stop
+            - segment.pos_marker.source_slice.start
+        ):
             return slice_length
         else:
             # If a segment did not originate from the original source, its slice
