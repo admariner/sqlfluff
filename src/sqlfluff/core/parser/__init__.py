@@ -1,51 +1,61 @@
 """init file for the parser."""
 
-from sqlfluff.core.parser.segments import (
-    BaseSegment,
-    BaseFileSegment,
-    RawSegment,
-    CodeSegment,
-    UnlexableSegment,
-    CommentSegment,
-    WhitespaceSegment,
-    NewlineSegment,
-    KeywordSegment,
-    SymbolSegment,
-    Indent,
-    Dedent,
-    ImplicitIndent,
-    SegmentGenerator,
-    IdentitySet,
-)
 from sqlfluff.core.parser.grammar import (
-    Sequence,
-    GreedyUntil,
-    StartsWith,
-    OneOf,
-    Delimited,
-    Bracketed,
     AnyNumberOf,
     AnySetOf,
-    Ref,
     Anything,
-    Nothing,
-    OptionallyBracketed,
+    Bracketed,
     Conditional,
+    Delimited,
+    Nothing,
+    OneOf,
+    OptionallyBracketed,
+    Ref,
+    Sequence,
 )
+from sqlfluff.core.parser.lexer import Lexer, RegexLexer, StringLexer
+from sqlfluff.core.parser.markers import PositionMarker
+from sqlfluff.core.parser.matchable import Matchable
+from sqlfluff.core.parser.parser import Parser
 from sqlfluff.core.parser.parsers import (
+    MultiStringParser,
+    RegexParser,
     StringParser,
     TypedParser,
-    RegexParser,
-    MultiStringParser,
 )
-from sqlfluff.core.parser.markers import PositionMarker
-from sqlfluff.core.parser.lexer import Lexer, StringLexer, RegexLexer
-from sqlfluff.core.parser.parser import Parser
-from sqlfluff.core.parser.matchable import Matchable
+from sqlfluff.core.parser.segments import (
+    BaseFileSegment,
+    BaseSegment,
+    BinaryOperatorSegment,
+    BracketedSegment,
+    CodeSegment,
+    CommentSegment,
+    ComparisonOperatorSegment,
+    CompositeBinaryOperatorSegment,
+    CompositeComparisonOperatorSegment,
+    Dedent,
+    IdentifierSegment,
+    ImplicitIndent,
+    Indent,
+    KeywordSegment,
+    LiteralKeywordSegment,
+    LiteralSegment,
+    NewlineSegment,
+    RawSegment,
+    SegmentGenerator,
+    SourceFix,
+    SymbolSegment,
+    UnlexableSegment,
+    WhitespaceSegment,
+    WordSegment,
+)
+from sqlfluff.core.parser.types import ParseMode
 
 __all__ = (
     "BaseSegment",
+    "SourceFix",
     "BaseFileSegment",
+    "BracketedSegment",
     "RawSegment",
     "CodeSegment",
     "UnlexableSegment",
@@ -54,13 +64,19 @@ __all__ = (
     "NewlineSegment",
     "KeywordSegment",
     "SymbolSegment",
+    "IdentifierSegment",
+    "LiteralSegment",
+    "LiteralKeywordSegment",
+    "BinaryOperatorSegment",
+    "CompositeBinaryOperatorSegment",
+    "ComparisonOperatorSegment",
+    "CompositeComparisonOperatorSegment",
+    "WordSegment",
     "Indent",
     "Dedent",
     "ImplicitIndent",
     "SegmentGenerator",
     "Sequence",
-    "GreedyUntil",
-    "StartsWith",
     "OneOf",
     "Delimited",
     "Bracketed",
@@ -81,5 +97,5 @@ __all__ = (
     "RegexLexer",
     "Parser",
     "Matchable",
-    "IdentitySet",
+    "ParseMode",
 )

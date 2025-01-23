@@ -25,12 +25,11 @@ for the wiki.
 
 :star2: **Fifth** - if you are so inclined - pull requests on the core codebase
 are always welcome. Dialect additions are often a good entry point for new
-contributors, and we have
-[a wiki page](https://github.com/sqlfluff/sqlfluff/wiki/Contributing-Dialect-Changes)
+contributors, and we have [a set of guides](https://docs.sqlfluff.com/en/stable/perma/guides.html)
 to help you through your first contribution. Bear in mind that all the tests
 should pass, and test coverage should not decrease unduly as part of the
 changes which you make. You may find it useful to familiarise yourself with the
-[architectural principles here](https://docs.sqlfluff.com/en/stable/internals.html#architecture)
+[architectural principles here](https://docs.sqlfluff.com/en/stable/perma/architecture.html)
 and with the [current documentation here](https://docs.sqlfluff.com).
 
 ## How The Community Works
@@ -84,7 +83,13 @@ changes.
 
 #### Requirements
 
+If you plan on working with a particular dbt plugin, you will need
+to ensure your python version is high enough to support it. For example,
+the instructions below use `python3.8` but if you are working with
+`dbt-snowflake` 1.9.0 you will need python at least 3.9.
+
 The simplest way to set up a development environment is to use `tox`.
+
 First ensure that you have tox installed:
 ```shell
 python3.8 -m pip install -U tox
@@ -92,32 +97,39 @@ python3.8 -m pip install -U tox
 **IMPORTANT:** `tox` must be installed with a minimum of Python 3.8 as
 the `mypy` checks are incompatible with 3.7. Those using newer versions of
 Python may replace `python3.8` as necessary (the test suite runs primarily
-under 3.11 for example).
+under 3.12 for example).
 
 Note: Unfortunately tox does not currently support setting just a minimum
 Python version (though this may be be coming in tox 4!).
 
 #### Creating a virtual environment
 
-A virtual environment can then be created and activated by running (check
-the [requirements](#requirements) before running this):
+A virtual environment can then be created and activated. For the
+various versions currently available you can check the `tox.ini` file.
+The numbers correspond to the dbt core version; dbt180 will install
+dbt 1.8.0.
+
+To build and activate the virtual environment:
 ```shell
-tox -e dbt021-py38 --devenv .venv
+tox -e dbt180 --devenv .venv
 source .venv/bin/activate
 ```
-(The `dbt021-py38` environment is a good default choice.
-However any version can be installed by replacing `dbt021-py38` with
-`py`, `py37`, `py39`, `dbt020-py38`, etc.
+(The `dbt180` environment is a good default choice.
+However any version can be installed by replacing `dbt180` with
+`py`, `py38` through `py313`, `dbt140` through `dbt190`, etc.
 `py` defaults to the python version that was used to install tox.
-However, to be able to run all tests including the dbt templater,
+To be able to run all tests including the dbt templater,
 choose one of the dbt environments.)
 
 Windows users should call `.venv\Scripts\activate` rather than `source .venv/bin/activate`.
+They may also want to substitute `winpy` for `py` in the commands above.
 
 This virtual environment will already have the package installed in editable
 mode for you, as well as `requirements_dev.txt` and `plugins/sqlfluff-plugin-example`.
 Additionally if a dbt virtual environment was specified, you will also have
 `dbt-core`, `dbt-postgres`, and `plugins/sqlfluff-templater-dbt` available.
+A different dbt plugin can be selected by changing the appropriate file under `constraints`
+for the desired package and version.
 
 ### Wiki
 
@@ -188,6 +200,62 @@ You can also manually test your updated code against a SQL file via:
 sqlfluff parse test.sql
 ```
 (ensure your virtual environment is activated first).
+
+#### How to use and understand the test suite
+
+When developing for SQLFluff, you may not need (or wish) to run the whole test
+suite, depending on what you are working on. Here are a couple of scenarios
+for development, and which parts of the test suite you may find most useful.
+
+1. For dialect improvements (i.e. changes to anything in [src/sqlfluff/dialects](./src/sqlfluff/dialects))
+   you should not need to continuously run the full core test suite. Running
+   either `tox -e generate-fixture-yml` (if using tox), or setting up a python
+   virtualenv and running `test/generate_parse_fixture_yml.py` directly will
+   usually be sufficient. Both of these options accept arguments to restrict
+   runs to specific dialects to further improve iteration speed. e.g.
+   - `tox -e generate-fixture-yml -- -d mysql` will run just the mysql tests.
+   - `python test/generate_parse_fixture_yml.py -d mysql` will do the same.
+2. Developing for the dbt templater should only require running the dbt test
+   suite (see below).
+3. Developing rules and rule plugins there are a couple of scenarios.
+   - When developing a new rule or working with a more isolated rule, you
+     should only need to run the tests for that rule. These are usually what
+     are called the _yaml tests_. This refers to a body of example sql
+     statements and potential fixes defined in a large set of yaml files
+     found in [test/fixtures/rules/std_rule_cases](./test/fixtures/rules/std_rule_cases).
+     The easiest way to run these is by calling that part of the suite
+     directly and filtering to just that rule. For example:
+     - `tox -e py39 -- test/rules/yaml_test_cases_test.py -k AL01`
+     - `pytest test/rules/yaml_test_cases_test.py -k AL01`
+   - When developing on some more complicated rules, or ones known to
+     have interactions with other rules, there are a set of rule fixing
+     tests which apply a set combination of those rules. These are best
+     run via the `autofix` tests. For example:
+     - `tox -e py39 -- test/rules/std_fix_auto_test.py`
+     - `pytest test/rules/std_fix_auto_test.py`
+     - Potentially even the full rules suite `tox -e py39 -- test/rules`
+   - A small number of core rules are also used in making sure that inner
+     parts of SQLFluff are also functioning. This isn't great isolation
+     but does mean that occasionally you may find side effects of your
+     changes in the wider test suite. These can usually be caught by
+     running the full `tox -e py39` suite as a final check (or using the
+     test suite on GitHub when posting your PR).
+4. When developing the internals of SQLFluff (i.e. anything not
+   already mentioned above), the test suite typically mirrors the structure
+   of the internal submodules of sqlfluff:
+   - When working with the CLI, the `sqlfluff.cli` module has a test suite
+     called via `tox -e py39 -- test/cli`.
+   - When working with the templaters (i.e. `sqlfluff.core.templaters`), the
+     corresponding test suite is found via `tox -e py39 -- test/core/templaters`.
+   - This rough guidance and may however not apply for all of the internals.
+     For example, changes to the internals of the parsing module (`sqlfluff.core.parser`)
+     are very likely to have knock-on implications across the rest of the test
+     suite and it may be necessary to run the whole thing. In these
+     situations however you can usually work slowly outward, for example:
+     1. If your change is to the `AnyOf()` grammar, first running `tox -e py39 -- test/core/parser/grammar_test.py` would be wise.
+     2. ...followed by `tox -e py39 -- test/core/parser` once the above is passing.
+     3. ...and then `tox -e py39 -- test/core`.
+     4. ...and finally the full suite `tox -e py39`.
 
 #### dbt templater tests
 
@@ -272,7 +340,7 @@ need a [GitHub Personal Access Token](https://docs.github.com/en/authentication/
 source .venv/bin/activate
 export GITHUB_REPOSITORY_OWNER=sqlfluff
 export GITHUB_TOKEN=gho_xxxxxxxx # Change to your token with "repo" permissions.
-python util.py prepare-release --new_version_num=0.13.4 # Change to your release number
+python util.py release 2.0.3 # Change to your release number
 ```
 
 Below is the old list of release steps, but many are automated by the process
@@ -317,7 +385,7 @@ described above.
 - [ ] Comment in #contributing slack channel about release candidate.
 - [ ] Update the draft PR as more changes get merged.
 - [ ] Get another contributor to approve the PR.
-- [ ] Merge the PR when looks like we've got all we’re gonna get for this release.
+- [ ] Merge the PR when looks like we've got all we’re going to get for this release.
 - [ ] Go to the [releases page](https://github.com/sqlfluff/sqlfluff/releases), edit
       the release to be same as [CHANGELOG.md](CHANGELOG.md) (remember to remove your
       release PR which doesn’t need to go in this). Add version tag and a title and

@@ -47,6 +47,22 @@ FROM dealer
 GROUP BY GROUPING SETS ((city, car_model), (city), (car_model), ())
 ORDER BY city;
 
+SELECT
+    city,
+    car_model,
+    sum(quantity) AS sum_quantity
+FROM dealer
+GROUP BY city, car_model GROUPING SETS ((city, car_model), (city), (car_model), ())
+ORDER BY city;
+
+SELECT
+    city,
+    car_model,
+    sum(quantity) AS sum_quantity
+FROM dealer
+GROUP BY city, car_model, GROUPING SETS ((city, car_model), (city), (car_model), ())
+ORDER BY city;
+
 -- Group by processing with `ROLLUP` clause.
 -- Equivalent GROUP BY GROUPING SETS ((city, car_model), (city), ())
 SELECT
@@ -86,6 +102,26 @@ SELECT
     count(*) AS record_count
 FROM people
 GROUP BY cube(name, age);
+
+-- CUBE within GROUP BY clause with single clause on newline
+SELECT
+    name,
+    count(*) AS record_count
+FROM people
+GROUP BY cube(
+    name
+);
+
+-- CUBE within GROUP BY clause with multiple clauses on newline
+SELECT
+    name,
+    age,
+    count(*) AS record_count
+FROM people
+GROUP BY cube(
+    name,
+    age
+);
 
 -- ROLLUP within GROUP BY clause
 SELECT

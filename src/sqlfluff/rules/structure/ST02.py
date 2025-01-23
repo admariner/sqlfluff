@@ -1,16 +1,35 @@
 """Implementation of Rule ST02."""
+
 from typing import List, Optional, Tuple
 
 from sqlfluff.core.parser import (
-    WhitespaceSegment,
-    SymbolSegment,
     KeywordSegment,
+    SymbolSegment,
+    WhitespaceSegment,
+    WordSegment,
 )
 from sqlfluff.core.parser.segments.base import BaseSegment
-
 from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
-from sqlfluff.utils.functional import Segments, sp, FunctionalContext
+from sqlfluff.utils.functional import FunctionalContext, Segments, sp
+
+
+class FunctionNameSegment(BaseSegment):
+    """Function name, including any prefix bits, e.g. project or schema.
+
+    NOTE: This is a minimal segment definition to allow appropriate fixing.
+    """
+
+    type = "function_name"
+
+
+class FunctionContentsSegment(BaseSegment):
+    """Function Contents.
+
+    NOTE: This is a minimal segment definition to allow appropriate fixing.
+    """
+
+    type = "function_contents"
 
 
 class Rule_ST02(BaseRule):
@@ -91,13 +110,19 @@ class Rule_ST02(BaseRule):
         """Generate list of fixes to convert CASE statement to COALESCE function."""
         # Add coalesce and opening parenthesis.
         edits = [
-            KeywordSegment("coalesce"),
-            SymbolSegment("(", type="start_bracket"),
-            coalesce_arg_1,
-            SymbolSegment(",", type="comma"),
-            WhitespaceSegment(),
-            coalesce_arg_2,
-            SymbolSegment(")", type="end_bracket"),
+            FunctionNameSegment(
+                segments=(WordSegment("coalesce", type="function_name_identifier"),)
+            ),
+            FunctionContentsSegment(
+                segments=(
+                    SymbolSegment("(", type="start_bracket"),
+                    coalesce_arg_1,
+                    SymbolSegment(",", type="comma"),
+                    WhitespaceSegment(),
+                    coalesce_arg_2,
+                    SymbolSegment(")", type="end_bracket"),
+                )
+            ),
         ]
 
         if preceding_not:
@@ -193,10 +218,25 @@ class Rule_ST02(BaseRule):
                     .children(sp.is_type("column_reference"))
                     .get()
                 )
+                array_accessor_segment = (
+                    Segments(condition_expression)
+                    .children(sp.is_type("array_accessor"))
+                    .get()
+                )
 
                 # Return None if none found (this condition does not apply to functions)
                 if not column_reference_segment:
                     return None
+
+                if array_accessor_segment:
+                    column_reference_segment_raw_upper = (
+                        column_reference_segment.raw_upper
+                        + array_accessor_segment.raw_upper
+                    )
+                else:
+                    column_reference_segment_raw_upper = (
+                        column_reference_segment.raw_upper
+                    )
 
                 if else_clauses:
                     else_expression = else_clauses.children(sp.is_type("expression"))[0]
@@ -204,14 +244,14 @@ class Rule_ST02(BaseRule):
                     # function.
                     if (
                         not is_not_prefix
-                        and column_reference_segment.raw_upper
+                        and column_reference_segment_raw_upper
                         == else_expression.raw_upper
                     ):
                         coalesce_arg_1 = else_expression
                         coalesce_arg_2 = then_expression
                     elif (
                         is_not_prefix
-                        and column_reference_segment.raw_upper
+                        and column_reference_segment_raw_upper
                         == then_expression.raw_upper
                     ):
                         coalesce_arg_1 = then_expression

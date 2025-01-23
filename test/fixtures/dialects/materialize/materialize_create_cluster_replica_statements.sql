@@ -1,8 +1,0 @@
-
-CREATE CLUSTER mz_joe REPLICAS (r1 (size '1'));
-CREATE CLUSTER mz_joe REPLICAS (r1 (size '1'), r2 (size '1'));
-
-CREATE CLUSTER REPLICA default.size_1 SIZE 'large';
-CREATE CLUSTER REPLICA c1.r1 SIZE = 'medium';
-
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b';

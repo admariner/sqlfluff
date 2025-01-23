@@ -8,15 +8,13 @@ NB: This is not part of the core sqlfluff code.
 
 # This contains various utility scripts
 
-import shutil
 import os
-import click
-import time
-import subprocess
-import sys
-import yaml
-import requests
 import re
+import shutil
+import time
+
+import click
+from fastcore.net import HTTPError
 from ghapi.all import GhApi
 
 
@@ -48,88 +46,28 @@ def clean_tests(path):
 
 
 @cli.command()
-@click.argument("cmd", nargs=-1)
-@click.option("--from-file", "-f", default=None)
-@click.option("--runs", default=3, show_default=True)
-def benchmark(cmd, runs, from_file):
-    """Benchmark how long it takes to run a particular command."""
-    if from_file:
-        with open(from_file) as yaml_file:
-            parsed = yaml.load(yaml_file.read(), Loader=yaml.FullLoader)
-            benchmarks = parsed["benchmarks"]
-            click.echo(repr(benchmarks))
-    elif cmd:
-        benchmarks = [{"name": str(hash(cmd)), "cmd": cmd}]
-    else:
-        click.echo("No command or file specified!")
-        sys.exit(1)
+@click.argument("new_version_num")
+def release(new_version_num):
+    """Change version number in the cfg files.
 
-    commit_hash = None
-    post_results = False
-    # Try and detect a CI environment
-    if "CI" in os.environ:
-        click.echo("CI detected!")
-        commit_hash = os.environ.get("GITHUB_SHA", None)
-        post_results = True
-        click.echo(f"Commit hash is: {commit_hash!r}")
-
-    all_results = {}
-    for run_no in range(runs):
-        click.echo(f"===== Run #{run_no + 1} =====")
-        results = {}
-        for benchmark in benchmarks:
-            # Iterate through benchmarks
-            click.echo("Starting benchmark: {!r}".format(benchmark["name"]))
-            t0 = time.monotonic()
-            click.echo("===START PROCESS OUTPUT===")
-            process = subprocess.run(benchmark["cmd"])
-            click.echo("===END PROCESS OUTPUT===")
-            t1 = time.monotonic()
-            if process.returncode != 0:
-                if benchmark["cmd"][0] == "sqlfluff" and benchmark["cmd"][1] == "fix":
-                    # Allow fix to fail as not all our benchmark errors are fixable
-                    click.echo(
-                        f"Fix command failed with return code: {process.returncode}"
-                    )
-                else:
-                    click.echo(f"Command failed with return code: {process.returncode}")
-                    sys.exit(process.returncode)
-            else:
-                duration = t1 - t0
-                click.echo(f"Process completed in {duration:.4f}s")
-                results[benchmark["name"]] = duration
-
-        if post_results:
-            click.echo(f"Posting results: {results}")
-            api_key = os.environ["SQLFLUFF_BENCHMARK_API_KEY"]
-            resp = requests.post(
-                "https://f32cvv8yh3.execute-api.eu-west-1.amazonaws.com/result/gh"
-                "/{repo}/{commit}".format(
-                    # TODO: update the stats collector eventually to allow the new repo
-                    # path
-                    repo="alanmcruickshank/sqlfluff",
-                    commit=commit_hash,
-                ),
-                params={"key": api_key},
-                json=results,
-            )
-            click.echo(resp.text)
-        all_results[run_no] = results
-    click.echo("===== Done =====")
-    for run_no in all_results:
-        click.echo("Run {:>5}: {}".format(f"#{run_no}", all_results[run_no]))
-
-
-@cli.command()
-@click.option("--new_version_num")
-def prepare_release(new_version_num):
-    """Change version number in the cfg files."""
+    NOTE: For fine grained personal access tokens, this requires
+    _write_ access to the "contents" scope. For dome reason, if you
+    only grant the _read_ access, you can't see any *draft* PRs
+    which are necessary for this script to run.
+    """
     api = GhApi(
         owner=os.environ["GITHUB_REPOSITORY_OWNER"],
         repo="sqlfluff",
         token=os.environ["GITHUB_TOKEN"],
     )
-    releases = api.repos.list_releases()
+    try:
+        releases = api.repos.list_releases(per_page=100)
+    except HTTPError as err:
+        raise click.UsageError(
+            "HTTP Error from GitHub API. Check your credentials.\n"
+            "(i.e. GITHUB_REPOSITORY_OWNER & GITHUB_TOKEN)\n"
+            f"{err}"
+        )
 
     latest_draft_release = None
     for rel in releases:
@@ -138,7 +76,21 @@ def prepare_release(new_version_num):
             break
 
     if not latest_draft_release:
-        raise ValueError("No draft release found!")
+        raise click.UsageError(
+            "No draft release found on GitHub.\n"
+            "This could be because the GitHub action which generates it is broken, "
+            "but is more likely due to using an API token which only has read-only "
+            "access to the `sqlfluff/sqlfluff` repository. This script requires an "
+            "API token with `read and write` access to the `contents` scope in "
+            "order to be able to view draft releases."
+        )
+
+    # Pre-releases are identifiable because they contain letters.
+    # https://peps.python.org/pep-0440/
+    is_pre_release = any(char.isalpha() for char in new_version_num)
+    click.echo(
+        f"Preparing for release {new_version_num}. (Pre-release: {is_pre_release})"
+    )
 
     # Linkify the PRs and authors
     draft_body_parts = latest_draft_release["body"].split("\n")
@@ -170,17 +122,19 @@ def prepare_release(new_version_num):
             seen_contributors.add(c["name"])
             deduped_potential_new_contributors.append(c)
 
+    click.echo("Updating CHANGELOG.md...")
     input_changelog = open("CHANGELOG.md", encoding="utf8").readlines()
     write_changelog = open("CHANGELOG.md", "w", encoding="utf8")
     for i, line in enumerate(input_changelog):
         write_changelog.write(line)
         if "DO NOT DELETE THIS LINE" in line:
             existing_entry_start = i + 2
+            new_heading = f"## [{new_version_num}] - {time.strftime('%Y-%m-%d')}\n"
             # If the release is already in the changelog, update it
             if f"## [{new_version_num}]" in input_changelog[existing_entry_start]:
-                input_changelog[
-                    existing_entry_start
-                ] = f"## [{new_version_num}] - {time.strftime('%Y-%m-%d')}\n"
+                click.echo(f"...found existing entry for {new_version_num}")
+                # Update the existing heading with the new date.
+                input_changelog[existing_entry_start] = new_heading
 
                 # Delete the existing What’s Changed and New Contributors sections
                 remaining_changelog = input_changelog[existing_entry_start:]
@@ -233,9 +187,8 @@ def prepare_release(new_version_num):
                 )
 
             else:
-                write_changelog.write(
-                    f"\n## [{new_version_num}] - {time.strftime('%Y-%m-%d')}\n\n## Highlights\n\n"  # noqa E501
-                )
+                click.echo(f"...creating new entry for {new_version_num}")
+                write_changelog.write(f"\n{new_heading}\n## Highlights\n\n")
                 write_changelog.write(whats_changed_text)
                 write_changelog.write("\n## New Contributors\n\n")
                 # Ensure contributor names don't appear in input_changelog list
@@ -249,31 +202,55 @@ def prepare_release(new_version_num):
 
     write_changelog.close()
 
-    for filename in ["setup.cfg", "plugins/sqlfluff-templater-dbt/setup.cfg"]:
+    click.echo("Updating plugins/sqlfluff-templater-dbt/pyproject.toml")
+    for filename in ["plugins/sqlfluff-templater-dbt/pyproject.toml"]:
         input_file = open(filename, "r").readlines()
-        write_file = open(filename, "w")
+        # Regardless of platform, write newlines as \n
+        write_file = open(filename, "w", newline="\n")
         for line in input_file:
-            for key in ["stable_version", "version"]:
-                if line.startswith(key):
-                    line = f"{key} = {new_version_num}\n"
-                    break
-            if line.startswith("    sqlfluff=="):
-                line = f"    sqlfluff=={new_version_num}\n"
+            if line.startswith("version"):
+                line = f'version = "{new_version_num}"\n'
+            elif line.startswith('    "sqlfluff=='):
+                line = f'    "sqlfluff=={new_version_num}",\n'
             write_file.write(line)
         write_file.close()
 
-    for filename in ["docs/source/gettingstarted.rst"]:
+    keys = ["version"]
+    if not is_pre_release:
+        # Only update stable_version if it's not a pre-release.
+        keys.append("stable_version")
+
+    click.echo("Updating pyproject.toml")
+    for filename in ["pyproject.toml"]:
         input_file = open(filename, "r").readlines()
-        write_file = open(filename, "w")
-        change_next_line = False
+        # Regardless of platform, write newlines as \n
+        write_file = open(filename, "w", newline="\n")
         for line in input_file:
-            if change_next_line:
-                line = f"    {new_version_num}\n"
-                change_next_line = False
-            elif line.startswith("    $ sqlfluff version"):
-                change_next_line = True
+            for key in keys:
+                if line.startswith(key):
+                    # For pyproject.toml we quote the version identifier.
+                    line = f'{key} = "{new_version_num}"\n'
+                    break
             write_file.write(line)
         write_file.close()
+
+    if not is_pre_release:
+        click.echo("Updating gettingstarted.rst")
+        for filename in ["docs/source/gettingstarted.rst"]:
+            input_file = open(filename, "r").readlines()
+            # Regardless of platform, write newlines as \n
+            write_file = open(filename, "w", newline="\n")
+            change_next_line = False
+            for line in input_file:
+                if change_next_line:
+                    line = f"    {new_version_num}\n"
+                    change_next_line = False
+                elif line.startswith("    $ sqlfluff version"):
+                    change_next_line = True
+                write_file.write(line)
+            write_file.close()
+
+    click.echo("DONE")
 
 
 if __name__ == "__main__":

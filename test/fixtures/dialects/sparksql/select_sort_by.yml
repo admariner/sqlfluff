@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: 165a27d604367bcfd0b6120bd77f56eb432074fd3ca1bed5785f1491971e8cea
+_hash: ac53a271e7f933adb38da8d484ae968ce808e415ab41a629cc1e5b326cfd5f1a
 file:
 - statement:
     select_statement:
@@ -15,10 +15,13 @@ file:
             hint_function:
               function_name:
                 function_name_identifier: REPARTITION
-              bracketed:
-                start_bracket: (
-                naked_identifier: zip_code
-                end_bracket: )
+              function_contents:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    column_reference:
+                      naked_identifier: zip_code
+                  end_bracket: )
             end_hint: '*/'
       - select_clause_element:
           column_reference:
@@ -82,10 +85,13 @@ file:
             hint_function:
               function_name:
                 function_name_identifier: REPARTITION
-              bracketed:
-                start_bracket: (
-                naked_identifier: zip_code
-                end_bracket: )
+              function_contents:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    column_reference:
+                      naked_identifier: zip_code
+                  end_bracket: )
             end_hint: '*/'
       - select_clause_element:
           column_reference:
@@ -147,10 +153,13 @@ file:
             hint_function:
               function_name:
                 function_name_identifier: REPARTITION
-              bracketed:
-                start_bracket: (
-                naked_identifier: zip_code
-                end_bracket: )
+              function_contents:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    column_reference:
+                      naked_identifier: zip_code
+                  end_bracket: )
             end_hint: '*/'
       - select_clause_element:
           column_reference:
@@ -218,10 +227,13 @@ file:
             hint_function:
               function_name:
                 function_name_identifier: REPARTITION
-              bracketed:
-                start_bracket: (
-                naked_identifier: zip_code
-                end_bracket: )
+              function_contents:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    column_reference:
+                      naked_identifier: zip_code
+                  end_bracket: )
             end_hint: '*/'
       - select_clause_element:
           column_reference:
@@ -287,10 +299,13 @@ file:
             hint_function:
               function_name:
                 function_name_identifier: REPARTITION
-              bracketed:
-                start_bracket: (
-                naked_identifier: zip_code
-                end_bracket: )
+              function_contents:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    column_reference:
+                      naked_identifier: zip_code
+                  end_bracket: )
             end_hint: '*/'
       - select_clause_element:
           column_reference:
@@ -360,10 +375,13 @@ file:
             hint_function:
               function_name:
                 function_name_identifier: REPARTITION
-              bracketed:
-                start_bracket: (
-                naked_identifier: zip_code
-                end_bracket: )
+              function_contents:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    column_reference:
+                      naked_identifier: zip_code
+                  end_bracket: )
             end_hint: '*/'
       - select_clause_element:
           column_reference:
@@ -452,30 +470,32 @@ file:
           function:
             function_name:
               function_name_identifier: LEFT
-            bracketed:
-            - start_bracket: (
-            - expression:
-                function:
-                  function_name:
-                    function_name_identifier: SUBSTRING_INDEX
-                  bracketed:
-                  - start_bracket: (
-                  - expression:
-                      column_reference:
-                        naked_identifier: name
-                  - comma: ','
-                  - expression:
-                      quoted_literal: "' '"
-                  - comma: ','
-                  - expression:
-                      numeric_literal:
-                        sign_indicator: '-'
-                        numeric_literal: '1'
-                  - end_bracket: )
-            - comma: ','
-            - expression:
-                numeric_literal: '1'
-            - end_bracket: )
+            function_contents:
+              bracketed:
+              - start_bracket: (
+              - expression:
+                  function:
+                    function_name:
+                      function_name_identifier: SUBSTRING_INDEX
+                    function_contents:
+                      bracketed:
+                      - start_bracket: (
+                      - expression:
+                          column_reference:
+                            naked_identifier: name
+                      - comma: ','
+                      - expression:
+                          quoted_literal: "' '"
+                      - comma: ','
+                      - expression:
+                          numeric_literal:
+                            sign_indicator: '-'
+                            numeric_literal: '1'
+                      - end_bracket: )
+              - comma: ','
+              - expression:
+                  numeric_literal: '1'
+              - end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -568,12 +588,13 @@ file:
           function:
             function_name:
               function_name_identifier: COUNT
-            bracketed:
-              start_bracket: (
-              expression:
-                column_reference:
-                  naked_identifier: age
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  column_reference:
+                    naked_identifier: age
+                end_bracket: )
           comparison_operator:
             raw_comparison_operator: '>'
           numeric_literal: '1'
@@ -582,4 +603,25 @@ file:
       - keyword: BY
       - column_reference:
           naked_identifier: age
+- statement_terminator: ;
+- statement:
+    select_statement:
+      select_clause:
+        keyword: SELECT
+        select_clause_element:
+          function:
+            function_name:
+              function_name_identifier: CURRENT_DATE
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
+          alias_expression:
+            keyword: AS
+            naked_identifier: p_data_date
+      sort_by_clause:
+      - keyword: SORT
+      - keyword: BY
+      - column_reference:
+          naked_identifier: p_data_date
 - statement_terminator: ;

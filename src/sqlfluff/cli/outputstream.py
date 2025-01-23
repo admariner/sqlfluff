@@ -1,4 +1,5 @@
 """Classes for managing linter output, used with OutputStreamFormatter."""
+
 import abc
 import os
 from typing import Any, Optional
@@ -7,20 +8,20 @@ import click
 from tqdm import tqdm
 
 from sqlfluff.core import FluffConfig
-from sqlfluff.core.enums import FormatType
+from sqlfluff.core.types import FormatType
 
 
 class OutputStream(abc.ABC):
     """Base class for linter output stream."""
 
-    def __init__(self, config: FluffConfig, context: Any = None):
+    def __init__(self, config: FluffConfig, context: Any = None) -> None:
         self.config = config
 
     def write(self, message: str) -> None:
         """Write message to output."""
         raise NotImplementedError  # pragma: no cover
 
-    def close(self):
+    def close(self) -> None:
         """Close output stream."""
         pass
 
@@ -33,7 +34,7 @@ class TqdmOutput(OutputStream):
     line. The `external_write_mode` allows to disable tqdm for writing time.
     """
 
-    def __init__(self, config: FluffConfig):
+    def __init__(self, config: FluffConfig) -> None:
         super().__init__(config)
 
     def write(self, message: str) -> None:
@@ -45,7 +46,7 @@ class TqdmOutput(OutputStream):
 class FileOutput(OutputStream):
     """Outputs to a specified file."""
 
-    def __init__(self, config: FluffConfig, output_path: str):
+    def __init__(self, config: FluffConfig, output_path: str) -> None:
         super().__init__(config)
         self.file = open(output_path, "w")
 
@@ -53,7 +54,7 @@ class FileOutput(OutputStream):
         """Write message to output_path."""
         print(message, file=self.file)
 
-    def close(self):
+    def close(self) -> None:
         """Close output file."""
         self.file.close()
 

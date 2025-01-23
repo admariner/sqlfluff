@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: 178acfd014cf9b8b0815c26e4b85e0121265e0f2aa05a2f1146a3c8f60f91449
+_hash: c94eefd991d0787043923936e196a25da93d10de5dcd2c99319be3bc0736a0a0
 file:
 - statement:
     select_statement:
@@ -13,21 +13,23 @@ file:
           function:
             function_name:
               function_name_identifier: explode
-            bracketed:
-              start_bracket: (
-              expression:
-                function:
-                  function_name:
-                    function_name_identifier: array
-                  bracketed:
-                  - start_bracket: (
-                  - expression:
-                      numeric_literal: '10'
-                  - comma: ','
-                  - expression:
-                      numeric_literal: '20'
-                  - end_bracket: )
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  function:
+                    function_name:
+                      function_name_identifier: array
+                    function_contents:
+                      bracketed:
+                      - start_bracket: (
+                      - expression:
+                          numeric_literal: '10'
+                      - comma: ','
+                      - expression:
+                          numeric_literal: '20'
+                      - end_bracket: )
+                end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -37,21 +39,23 @@ file:
           function:
             function_name:
               function_name_identifier: explode_outer
-            bracketed:
-              start_bracket: (
-              expression:
-                function:
-                  function_name:
-                    function_name_identifier: array
-                  bracketed:
-                  - start_bracket: (
-                  - expression:
-                      numeric_literal: '10'
-                  - comma: ','
-                  - expression:
-                      numeric_literal: '20'
-                  - end_bracket: )
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  function:
+                    function_name:
+                      function_name_identifier: array
+                    function_contents:
+                      bracketed:
+                      - start_bracket: (
+                      - expression:
+                          numeric_literal: '10'
+                      - comma: ','
+                      - expression:
+                          numeric_literal: '20'
+                      - end_bracket: )
+                end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -75,29 +79,31 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: explode
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: explode
+              function_contents:
                 bracketed:
                   start_bracket: (
                   expression:
                     function:
                       function_name:
                         function_name_identifier: array
-                      bracketed:
-                      - start_bracket: (
-                      - expression:
-                          numeric_literal: '3'
-                      - comma: ','
-                      - expression:
-                          numeric_literal: '4'
-                      - end_bracket: )
+                      function_contents:
+                        bracketed:
+                        - start_bracket: (
+                        - expression:
+                            numeric_literal: '3'
+                        - comma: ','
+                        - expression:
+                            numeric_literal: '4'
+                        - end_bracket: )
                   end_bracket: )
-            - keyword: AS
-            - naked_identifier: c2
+          - keyword: AS
+          - naked_identifier: c2
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -121,29 +127,31 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: explode_outer
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: explode_outer
+              function_contents:
                 bracketed:
                   start_bracket: (
                   expression:
                     function:
                       function_name:
                         function_name_identifier: array
-                      bracketed:
-                      - start_bracket: (
-                      - expression:
-                          numeric_literal: '3'
-                      - comma: ','
-                      - expression:
-                          numeric_literal: '4'
-                      - end_bracket: )
+                      function_contents:
+                        bracketed:
+                        - start_bracket: (
+                        - expression:
+                            numeric_literal: '3'
+                        - comma: ','
+                        - expression:
+                            numeric_literal: '4'
+                        - end_bracket: )
                   end_bracket: )
-            - keyword: AS
-            - naked_identifier: c2
+          - keyword: AS
+          - naked_identifier: c2
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -153,41 +161,45 @@ file:
           function:
             function_name:
               function_name_identifier: inline
-            bracketed:
-              start_bracket: (
-              expression:
-                function:
-                  function_name:
-                    function_name_identifier: array
-                  bracketed:
-                  - start_bracket: (
-                  - expression:
-                      function:
-                        function_name:
-                          function_name_identifier: struct
-                        bracketed:
-                        - start_bracket: (
-                        - expression:
-                            numeric_literal: '1'
-                        - comma: ','
-                        - expression:
-                            quoted_literal: "'a'"
-                        - end_bracket: )
-                  - comma: ','
-                  - expression:
-                      function:
-                        function_name:
-                          function_name_identifier: struct
-                        bracketed:
-                        - start_bracket: (
-                        - expression:
-                            numeric_literal: '2'
-                        - comma: ','
-                        - expression:
-                            quoted_literal: "'b'"
-                        - end_bracket: )
-                  - end_bracket: )
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  function:
+                    function_name:
+                      function_name_identifier: array
+                    function_contents:
+                      bracketed:
+                      - start_bracket: (
+                      - expression:
+                          function:
+                            function_name:
+                              function_name_identifier: struct
+                            function_contents:
+                              bracketed:
+                              - start_bracket: (
+                              - expression:
+                                  numeric_literal: '1'
+                              - comma: ','
+                              - expression:
+                                  quoted_literal: "'a'"
+                              - end_bracket: )
+                      - comma: ','
+                      - expression:
+                          function:
+                            function_name:
+                              function_name_identifier: struct
+                            function_contents:
+                              bracketed:
+                              - start_bracket: (
+                              - expression:
+                                  numeric_literal: '2'
+                              - comma: ','
+                              - expression:
+                                  quoted_literal: "'b'"
+                              - end_bracket: )
+                      - end_bracket: )
+                end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -197,41 +209,45 @@ file:
           function:
             function_name:
               function_name_identifier: inline_outer
-            bracketed:
-              start_bracket: (
-              expression:
-                function:
-                  function_name:
-                    function_name_identifier: array
-                  bracketed:
-                  - start_bracket: (
-                  - expression:
-                      function:
-                        function_name:
-                          function_name_identifier: struct
-                        bracketed:
-                        - start_bracket: (
-                        - expression:
-                            numeric_literal: '1'
-                        - comma: ','
-                        - expression:
-                            quoted_literal: "'a'"
-                        - end_bracket: )
-                  - comma: ','
-                  - expression:
-                      function:
-                        function_name:
-                          function_name_identifier: struct
-                        bracketed:
-                        - start_bracket: (
-                        - expression:
-                            numeric_literal: '2'
-                        - comma: ','
-                        - expression:
-                            quoted_literal: "'b'"
-                        - end_bracket: )
-                  - end_bracket: )
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  function:
+                    function_name:
+                      function_name_identifier: array
+                    function_contents:
+                      bracketed:
+                      - start_bracket: (
+                      - expression:
+                          function:
+                            function_name:
+                              function_name_identifier: struct
+                            function_contents:
+                              bracketed:
+                              - start_bracket: (
+                              - expression:
+                                  numeric_literal: '1'
+                              - comma: ','
+                              - expression:
+                                  quoted_literal: "'a'"
+                              - end_bracket: )
+                      - comma: ','
+                      - expression:
+                          function:
+                            function_name:
+                              function_name_identifier: struct
+                            function_contents:
+                              bracketed:
+                              - start_bracket: (
+                              - expression:
+                                  numeric_literal: '2'
+                              - comma: ','
+                              - expression:
+                                  quoted_literal: "'b'"
+                              - end_bracket: )
+                      - end_bracket: )
+                end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -255,51 +271,55 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: inline
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: inline
+              function_contents:
                 bracketed:
                   start_bracket: (
                   expression:
                     function:
                       function_name:
                         function_name_identifier: array
-                      bracketed:
-                      - start_bracket: (
-                      - expression:
-                          function:
-                            function_name:
-                              function_name_identifier: struct
-                            bracketed:
-                            - start_bracket: (
-                            - expression:
-                                numeric_literal: '1'
-                            - comma: ','
-                            - expression:
-                                quoted_literal: "'a'"
-                            - end_bracket: )
-                      - comma: ','
-                      - expression:
-                          function:
-                            function_name:
-                              function_name_identifier: struct
-                            bracketed:
-                            - start_bracket: (
-                            - expression:
-                                numeric_literal: '2'
-                            - comma: ','
-                            - expression:
-                                quoted_literal: "'b'"
-                            - end_bracket: )
-                      - end_bracket: )
+                      function_contents:
+                        bracketed:
+                        - start_bracket: (
+                        - expression:
+                            function:
+                              function_name:
+                                function_name_identifier: struct
+                              function_contents:
+                                bracketed:
+                                - start_bracket: (
+                                - expression:
+                                    numeric_literal: '1'
+                                - comma: ','
+                                - expression:
+                                    quoted_literal: "'a'"
+                                - end_bracket: )
+                        - comma: ','
+                        - expression:
+                            function:
+                              function_name:
+                                function_name_identifier: struct
+                              function_contents:
+                                bracketed:
+                                - start_bracket: (
+                                - expression:
+                                    numeric_literal: '2'
+                                - comma: ','
+                                - expression:
+                                    quoted_literal: "'b'"
+                                - end_bracket: )
+                        - end_bracket: )
                   end_bracket: )
-            - keyword: AS
-            - naked_identifier: c1
-            - comma: ','
-            - naked_identifier: c2
+          - keyword: AS
+          - naked_identifier: c1
+          - comma: ','
+          - naked_identifier: c2
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -323,51 +343,55 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: inline_outer
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: inline_outer
+              function_contents:
                 bracketed:
                   start_bracket: (
                   expression:
                     function:
                       function_name:
                         function_name_identifier: array
-                      bracketed:
-                      - start_bracket: (
-                      - expression:
-                          function:
-                            function_name:
-                              function_name_identifier: struct
-                            bracketed:
-                            - start_bracket: (
-                            - expression:
-                                numeric_literal: '1'
-                            - comma: ','
-                            - expression:
-                                quoted_literal: "'a'"
-                            - end_bracket: )
-                      - comma: ','
-                      - expression:
-                          function:
-                            function_name:
-                              function_name_identifier: struct
-                            bracketed:
-                            - start_bracket: (
-                            - expression:
-                                numeric_literal: '2'
-                            - comma: ','
-                            - expression:
-                                quoted_literal: "'b'"
-                            - end_bracket: )
-                      - end_bracket: )
+                      function_contents:
+                        bracketed:
+                        - start_bracket: (
+                        - expression:
+                            function:
+                              function_name:
+                                function_name_identifier: struct
+                              function_contents:
+                                bracketed:
+                                - start_bracket: (
+                                - expression:
+                                    numeric_literal: '1'
+                                - comma: ','
+                                - expression:
+                                    quoted_literal: "'a'"
+                                - end_bracket: )
+                        - comma: ','
+                        - expression:
+                            function:
+                              function_name:
+                                function_name_identifier: struct
+                              function_contents:
+                                bracketed:
+                                - start_bracket: (
+                                - expression:
+                                    numeric_literal: '2'
+                                - comma: ','
+                                - expression:
+                                    quoted_literal: "'b'"
+                                - end_bracket: )
+                        - end_bracket: )
                   end_bracket: )
-            - keyword: AS
-            - naked_identifier: c1
-            - comma: ','
-            - naked_identifier: c2
+          - keyword: AS
+          - naked_identifier: c1
+          - comma: ','
+          - naked_identifier: c2
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -377,21 +401,23 @@ file:
           function:
             function_name:
               function_name_identifier: posexplode
-            bracketed:
-              start_bracket: (
-              expression:
-                function:
-                  function_name:
-                    function_name_identifier: array
-                  bracketed:
-                  - start_bracket: (
-                  - expression:
-                      numeric_literal: '10'
-                  - comma: ','
-                  - expression:
-                      numeric_literal: '20'
-                  - end_bracket: )
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  function:
+                    function_name:
+                      function_name_identifier: array
+                    function_contents:
+                      bracketed:
+                      - start_bracket: (
+                      - expression:
+                          numeric_literal: '10'
+                      - comma: ','
+                      - expression:
+                          numeric_literal: '20'
+                      - end_bracket: )
+                end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -401,21 +427,23 @@ file:
           function:
             function_name:
               function_name_identifier: posexplode_outer
-            bracketed:
-              start_bracket: (
-              expression:
-                function:
-                  function_name:
-                    function_name_identifier: array
-                  bracketed:
-                  - start_bracket: (
-                  - expression:
-                      numeric_literal: '10'
-                  - comma: ','
-                  - expression:
-                      numeric_literal: '20'
-                  - end_bracket: )
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  function:
+                    function_name:
+                      function_name_identifier: array
+                    function_contents:
+                      bracketed:
+                      - start_bracket: (
+                      - expression:
+                          numeric_literal: '10'
+                      - comma: ','
+                      - expression:
+                          numeric_literal: '20'
+                      - end_bracket: )
+                end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -439,29 +467,31 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: posexplode
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: posexplode
+              function_contents:
                 bracketed:
                   start_bracket: (
                   expression:
                     function:
                       function_name:
                         function_name_identifier: array
-                      bracketed:
-                      - start_bracket: (
-                      - expression:
-                          numeric_literal: '10'
-                      - comma: ','
-                      - expression:
-                          numeric_literal: '20'
-                      - end_bracket: )
+                      function_contents:
+                        bracketed:
+                        - start_bracket: (
+                        - expression:
+                            numeric_literal: '10'
+                        - comma: ','
+                        - expression:
+                            numeric_literal: '20'
+                        - end_bracket: )
                   end_bracket: )
-            - keyword: AS
-            - naked_identifier: c1
+          - keyword: AS
+          - naked_identifier: c1
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -485,29 +515,31 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: posexplode_outer
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: posexplode_outer
+              function_contents:
                 bracketed:
                   start_bracket: (
                   expression:
                     function:
                       function_name:
                         function_name_identifier: array
-                      bracketed:
-                      - start_bracket: (
-                      - expression:
-                          numeric_literal: '10'
-                      - comma: ','
-                      - expression:
-                          numeric_literal: '20'
-                      - end_bracket: )
+                      function_contents:
+                        bracketed:
+                        - start_bracket: (
+                        - expression:
+                            numeric_literal: '10'
+                        - comma: ','
+                        - expression:
+                            numeric_literal: '20'
+                        - end_bracket: )
                   end_bracket: )
-            - keyword: AS
-            - naked_identifier: c1
+          - keyword: AS
+          - naked_identifier: c1
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -517,20 +549,21 @@ file:
           function:
             function_name:
               function_name_identifier: stack
-            bracketed:
-            - start_bracket: (
-            - expression:
-                numeric_literal: '2'
-            - comma: ','
-            - expression:
-                numeric_literal: '1'
-            - comma: ','
-            - expression:
-                numeric_literal: '2'
-            - comma: ','
-            - expression:
-                numeric_literal: '3'
-            - end_bracket: )
+            function_contents:
+              bracketed:
+              - start_bracket: (
+              - expression:
+                  numeric_literal: '2'
+              - comma: ','
+              - expression:
+                  numeric_literal: '1'
+              - comma: ','
+              - expression:
+                  numeric_literal: '2'
+              - comma: ','
+              - expression:
+                  numeric_literal: '3'
+              - end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -554,12 +587,13 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: stack
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: stack
+              function_contents:
                 bracketed:
                 - start_bracket: (
                 - expression:
@@ -574,10 +608,10 @@ file:
                 - expression:
                     numeric_literal: '3'
                 - end_bracket: )
-            - keyword: AS
-            - naked_identifier: c1
-            - comma: ','
-            - naked_identifier: c2
+          - keyword: AS
+          - naked_identifier: c1
+          - comma: ','
+          - naked_identifier: c2
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -587,17 +621,18 @@ file:
           function:
             function_name:
               function_name_identifier: json_tuple
-            bracketed:
-            - start_bracket: (
-            - expression:
-                quoted_literal: "'{\"a\":1, \"b\":2}'"
-            - comma: ','
-            - expression:
-                quoted_literal: "'a'"
-            - comma: ','
-            - expression:
-                quoted_literal: "'b'"
-            - end_bracket: )
+            function_contents:
+              bracketed:
+              - start_bracket: (
+              - expression:
+                  quoted_literal: "'{\"a\":1, \"b\":2}'"
+              - comma: ','
+              - expression:
+                  quoted_literal: "'a'"
+              - comma: ','
+              - expression:
+                  quoted_literal: "'b'"
+              - end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -621,12 +656,13 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: json_tuple
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: json_tuple
+              function_contents:
                 bracketed:
                 - start_bracket: (
                 - expression:
@@ -638,10 +674,10 @@ file:
                 - expression:
                     quoted_literal: "'b'"
                 - end_bracket: )
-            - keyword: AS
-            - naked_identifier: c1
-            - comma: ','
-            - naked_identifier: c2
+          - keyword: AS
+          - naked_identifier: c1
+          - comma: ','
+          - naked_identifier: c2
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -651,14 +687,15 @@ file:
           function:
             function_name:
               function_name_identifier: parse_url
-            bracketed:
-            - start_bracket: (
-            - expression:
-                quoted_literal: "'http://spark.apache.org/path?query=1'"
-            - comma: ','
-            - expression:
-                quoted_literal: "'HOST'"
-            - end_bracket: )
+            function_contents:
+              bracketed:
+              - start_bracket: (
+              - expression:
+                  quoted_literal: "'http://spark.apache.org/path?query=1'"
+              - comma: ','
+              - expression:
+                  quoted_literal: "'HOST'"
+              - end_bracket: )
 - statement_terminator: ;
 - statement:
     select_statement:
@@ -682,12 +719,13 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: test
-            lateral_view_clause:
-            - keyword: LATERAL
-            - keyword: VIEW
-            - function:
-                function_name:
-                  function_name_identifier: parse_url
+          lateral_view_clause:
+          - keyword: LATERAL
+          - keyword: VIEW
+          - function:
+              function_name:
+                function_name_identifier: parse_url
+              function_contents:
                 bracketed:
                 - start_bracket: (
                 - expression:
@@ -696,6 +734,6 @@ file:
                 - expression:
                     quoted_literal: "'HOST'"
                 - end_bracket: )
-            - keyword: AS
-            - naked_identifier: c1
+          - keyword: AS
+          - naked_identifier: c1
 - statement_terminator: ;

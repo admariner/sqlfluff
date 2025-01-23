@@ -77,6 +77,15 @@ test_set_clause:
     UPDATE table1 SET col = NULL
     WHERE col = ""
 
+test_bigquery_set_options:
+  pass_str: |
+    ALTER TABLE table
+    SET OPTIONS (expiration_timestamp = NULL)
+    ;
+  configs:
+    core:
+      dialect: bigquery
+
 test_tsql_exec_clause:
   pass_str: |
     exec something
@@ -96,3 +105,17 @@ test_tsql_alternate_alias_syntax:
   configs:
     core:
       dialect: tsql
+
+test_exclude_constraint:
+  pass_str: |
+    alter table abc add constraint xyz exclude (field WITH =);
+  configs:
+    core:
+      dialect: postgres
+
+test_mysql_system_variable:
+  pass_str: |
+    SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0;
+  configs:
+    core:
+      dialect: mysql

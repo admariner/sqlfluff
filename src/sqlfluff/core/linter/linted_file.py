@@ -5,37 +5,61 @@ contains all of the routines to apply fixes to that file
 post linting.
 """
 
-import os
 import logging
+import os
 import shutil
 import stat
 import tempfile
-from typing import (
-    Any,
-    Iterable,
-    List,
-    NamedTuple,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-    Type,
-)
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple, Type, Union
 
 from sqlfluff.core.errors import (
+    CheckTuple,
     SQLBaseError,
     SQLLintError,
-    CheckTuple,
+    SQLParseError,
+    SQLTemplaterError,
 )
-from sqlfluff.core.templaters import TemplatedFile, RawFileSlice
+from sqlfluff.core.formatter import FormatterInterface
+from sqlfluff.core.linter.patch import FixPatch, generate_source_patches
 
 # Classes needed only for type checking
-from sqlfluff.core.parser.segments import BaseSegment, FixPatch
-
-from sqlfluff.core.linter.common import NoQaDirective
+from sqlfluff.core.parser.segments import BaseSegment
+from sqlfluff.core.rules.noqa import IgnoreMask
+from sqlfluff.core.templaters import RawFileSlice, TemplatedFile
 
 # Instantiate the linter logger
 linter_logger: logging.Logger = logging.getLogger("sqlfluff.linter")
+
+TMP_PRS_ERROR_TYPES = (SQLTemplaterError, SQLParseError)
+
+
+@dataclass
+class FileTimings:
+    """A dataclass for holding the timings information for a file."""
+
+    step_timings: Dict[str, float]
+    # NOTE: Because rules may run more than once for any
+    # given file we record each run and then we can post
+    # process this as we wish later.
+    rule_timings: List[Tuple[str, str, float]]
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return "<FileTimings>"
+
+    def get_rule_timing_dict(self) -> Dict[str, float]:
+        """Generate a summary to total time in each rule.
+
+        This is primarily for csv export.
+        """
+        total_times: Dict[str, float] = defaultdict(float)
+
+        for code, _, time in self.rule_timings:
+            total_times[code] += time
+
+        # Return as plain dict
+        return dict(total_times.items())
 
 
 class LintedFile(NamedTuple):
@@ -43,13 +67,15 @@ class LintedFile(NamedTuple):
 
     path: str
     violations: List[SQLBaseError]
-    time_dict: dict
+    timings: Optional[FileTimings]
     tree: Optional[BaseSegment]
-    ignore_mask: List[NoQaDirective]
-    templated_file: TemplatedFile
+    ignore_mask: Optional[IgnoreMask]
+    templated_file: Optional[TemplatedFile]
     encoding: str
 
-    def check_tuples(self, raise_on_non_linting_violations=True) -> List[CheckTuple]:
+    def check_tuples(
+        self, raise_on_non_linting_violations: bool = True
+    ) -> List[CheckTuple]:
         """Make a list of check_tuples.
 
         This assumes that all the violations found are
@@ -57,7 +83,6 @@ class LintedFile(NamedTuple):
         raises that error.
         """
         vs: List[CheckTuple] = []
-        v: SQLLintError
         for v in self.get_violations():
             if isinstance(v, SQLLintError):
                 vs.append(v.check_tuple())
@@ -88,7 +113,9 @@ class LintedFile(NamedTuple):
                 dedupe_buffer.add(signature)
             else:
                 linter_logger.debug("Removing duplicate source violation: %r", v)
-        return new_violations
+        # Sort on return so that if any are out of order, they're now ordered
+        # appropriately. This happens most often when linting multiple variants.
+        return sorted(new_violations, key=lambda v: (v.line_no, v.line_pos))
 
     def get_violations(
         self,
@@ -96,8 +123,9 @@ class LintedFile(NamedTuple):
         types: Optional[Union[Type[SQLBaseError], Iterable[Type[SQLBaseError]]]] = None,
         filter_ignore: bool = True,
         filter_warning: bool = True,
+        warn_unused_ignores: bool = False,
         fixable: Optional[bool] = None,
-    ) -> list:
+    ) -> List[SQLBaseError]:
         """Get a list of violations, respecting filters and ignore options.
 
         Optionally now with filters.
@@ -130,133 +158,39 @@ class LintedFile(NamedTuple):
             violations = [v for v in violations if not v.ignore]
             # Ignore any rules in the ignore mask
             if self.ignore_mask:
-                violations = self.ignore_masked_violations(violations, self.ignore_mask)
+                violations = self.ignore_mask.ignore_masked_violations(violations)
         # Filter warning violations
         if filter_warning:
             violations = [v for v in violations if not v.warning]
+        # Add warnings for unneeded noqa if applicable
+        if warn_unused_ignores and not filter_warning and self.ignore_mask:
+            violations += self.ignore_mask.generate_warnings_for_unused()
         return violations
 
-    @staticmethod
-    def _ignore_masked_violations_single_line(
-        violations: List[SQLBaseError], ignore_mask: List[NoQaDirective]
-    ):
-        """Returns whether to ignore error for line-specific directives.
-
-        The "ignore" list is assumed to ONLY contain NoQaDirectives with
-        action=None.
-        """
-        for ignore in ignore_mask:
-            violations = [
-                v
-                for v in violations
-                if not (
-                    v.line_no == ignore.line_no
-                    and (ignore.rules is None or v.rule_code() in ignore.rules)
-                )
-            ]
-        return violations
-
-    @staticmethod
-    def _should_ignore_violation_line_range(
-        line_no: int, ignore_rule: List[NoQaDirective]
-    ):
-        """Returns whether to ignore a violation at line_no."""
-        # Loop through the NoQaDirectives to find the state of things at
-        # line_no. Assumptions about "ignore_rule":
-        # - Contains directives for only ONE RULE, i.e. the rule that was
-        #   violated at line_no
-        # - Sorted in ascending order by line number
-        disable = False
-        for ignore in ignore_rule:
-            if ignore.line_no > line_no:
-                break
-            disable = ignore.action == "disable"
-        return disable
-
-    @classmethod
-    def _ignore_masked_violations_line_range(
-        cls, violations: List[SQLBaseError], ignore_mask: List[NoQaDirective]
-    ):
-        """Returns whether to ignore error for line-range directives.
-
-        The "ignore" list is assumed to ONLY contain NoQaDirectives where
-        action is "enable" or "disable".
-        """
-        result = []
-        for v in violations:
-            # Find the directives that affect the violated rule "v", either
-            # because they specifically reference it or because they don't
-            # specify a list of rules, thus affecting ALL rules.
-            ignore_rule = sorted(
-                (
-                    ignore
-                    for ignore in ignore_mask
-                    if not ignore.rules
-                    or (v.rule_code() in cast(Tuple[str, ...], ignore.rules))
-                ),
-                key=lambda ignore: ignore.line_no,
-            )
-            # Determine whether to ignore the violation, based on the relevant
-            # enable/disable directives.
-            if not cls._should_ignore_violation_line_range(v.line_no, ignore_rule):
-                result.append(v)
-        return result
-
-    @classmethod
-    def ignore_masked_violations(
-        cls, violations: List[SQLBaseError], ignore_mask: List[NoQaDirective]
-    ) -> List[SQLBaseError]:
-        """Remove any violations specified by ignore_mask.
-
-        This involves two steps:
-        1. Filter out violations affected by single-line "noqa" directives.
-        2. Filter out violations affected by disable/enable "noqa" directives.
-        """
-        ignore_specific = [ignore for ignore in ignore_mask if not ignore.action]
-        ignore_range = [ignore for ignore in ignore_mask if ignore.action]
-        violations = cls._ignore_masked_violations_single_line(
-            violations, ignore_specific
-        )
-        violations = cls._ignore_masked_violations_line_range(violations, ignore_range)
-        return violations
-
-    def num_violations(self, **kwargs) -> int:
+    def num_violations(
+        self,
+        types: Optional[Union[Type[SQLBaseError], Iterable[Type[SQLBaseError]]]] = None,
+        filter_ignore: bool = True,
+        filter_warning: bool = True,
+        fixable: Optional[bool] = None,
+    ) -> int:
         """Count the number of violations.
 
         Optionally now with filters.
         """
-        violations = self.get_violations(**kwargs)
+        violations = self.get_violations(
+            types=types,
+            filter_ignore=filter_ignore,
+            filter_warning=filter_warning,
+            fixable=fixable,
+        )
         return len(violations)
 
     def is_clean(self) -> bool:
         """Return True if there are no ignorable violations."""
         return not any(self.get_violations(filter_ignore=True))
 
-    @staticmethod
-    def _log_hints(patch: FixPatch, templated_file: TemplatedFile):
-        """Log hints for debugging during patch generation."""
-        # This next bit is ALL FOR LOGGING AND DEBUGGING
-        max_log_length = 10
-        if patch.templated_slice.start >= max_log_length:
-            pre_hint = templated_file.templated_str[
-                patch.templated_slice.start
-                - max_log_length : patch.templated_slice.start
-            ]
-        else:
-            pre_hint = templated_file.templated_str[: patch.templated_slice.start]
-        if patch.templated_slice.stop + max_log_length < len(
-            templated_file.templated_str
-        ):
-            post_hint = templated_file.templated_str[
-                patch.templated_slice.stop : patch.templated_slice.stop + max_log_length
-            ]
-        else:
-            post_hint = templated_file.templated_str[patch.templated_slice.stop :]
-        linter_logger.debug(
-            "        Templated Hint: ...%r <> %r...", pre_hint, post_hint
-        )
-
-    def fix_string(self) -> Tuple[Any, bool]:
+    def fix_string(self) -> Tuple[str, bool]:
         """Obtain the changes to a path as a string.
 
         We use the source mapping features of TemplatedFile
@@ -274,8 +208,9 @@ class LintedFile(NamedTuple):
         completely dialect agnostic. A Segment is determined by the
         Lexer from portions of strings after templating.
         """
+        assert self.templated_file, "Fixing a string requires successful templating."
         linter_logger.debug("Original Tree: %r", self.templated_file.templated_str)
-        assert self.tree
+        assert self.tree, "Fixing a string requires successful parsing."
         linter_logger.debug("Fixed Tree: %r", self.tree.raw)
 
         # The sliced file is contiguous in the TEMPLATED space.
@@ -298,7 +233,7 @@ class LintedFile(NamedTuple):
         # Generate patches from the fixed tree. In the process we sort
         # and deduplicate them so that the resultant list is in the
         # the right order for the source file without any duplicates.
-        filtered_source_patches = self._generate_source_patches(
+        filtered_source_patches = generate_source_patches(
             self.tree, self.templated_file
         )
         linter_logger.debug("Filtered source patches:")
@@ -325,89 +260,6 @@ class LintedFile(NamedTuple):
 
         # The success metric here is whether anything ACTUALLY changed.
         return fixed_source_string, fixed_source_string != original_source
-
-    @classmethod
-    def _generate_source_patches(
-        cls, tree: BaseSegment, templated_file: TemplatedFile
-    ) -> List[FixPatch]:
-        """Use the fixed tree to generate source patches.
-
-        Importantly here we deduplicate and sort the patches
-        from their position in the templated file into their
-        intended order in the source file.
-        """
-        # Iterate patches, filtering and translating as we go:
-        linter_logger.debug("### Beginning Patch Iteration.")
-        filtered_source_patches = []
-        dedupe_buffer = []
-        # We use enumerate so that we get an index for each patch. This is entirely
-        # so when debugging logs we can find a given patch again!
-        for idx, patch in enumerate(tree.iter_patches(templated_file=templated_file)):
-            linter_logger.debug("  %s Yielded patch: %s", idx, patch)
-            cls._log_hints(patch, templated_file)
-
-            # Check for duplicates
-            if patch.dedupe_tuple() in dedupe_buffer:
-                linter_logger.info(
-                    "      - Skipping. Source space Duplicate: %s",
-                    patch.dedupe_tuple(),
-                )
-                continue
-
-            # We now evaluate patches in the source-space for whether they overlap
-            # or disrupt any templated sections.
-            # The intent here is that unless explicitly stated, a fix should never
-            # disrupt a templated section.
-            # NOTE: We rely here on the patches being generated in order.
-            # TODO: Implement a mechanism for doing templated section fixes. Given
-            # these patches are currently generated from fixed segments, there will
-            # likely need to be an entirely different mechanism
-
-            # Get the affected raw slices.
-            local_raw_slices = templated_file.raw_slices_spanning_source_slice(
-                patch.source_slice
-            )
-            local_type_list = [slc.slice_type for slc in local_raw_slices]
-
-            # Deal with the easy cases of 1) New code at end 2) only literals
-            if not local_type_list or set(local_type_list) == {"literal"}:
-                linter_logger.info(
-                    "      * Keeping patch on new or literal-only section.",
-                )
-                filtered_source_patches.append(patch)
-                dedupe_buffer.append(patch.dedupe_tuple())
-            # Handle the easy case of an explicit source fix
-            elif patch.patch_category == "source":
-                linter_logger.info(
-                    "      * Keeping explicit source fix patch.",
-                )
-                filtered_source_patches.append(patch)
-                dedupe_buffer.append(patch.dedupe_tuple())
-            # Is it a zero length patch.
-            elif (
-                patch.source_slice.start == patch.source_slice.stop
-                and patch.source_slice.start == local_raw_slices[0].source_idx
-            ):
-                linter_logger.info(
-                    "      * Keeping insertion patch on slice boundary.",
-                )
-                filtered_source_patches.append(patch)
-                dedupe_buffer.append(patch.dedupe_tuple())
-            else:  # pragma: no cover
-                # We've got a situation where the ends of our patch need to be
-                # more carefully mapped. This used to happen with greedy template
-                # element matching, but should now never happen. In the event that
-                # it does, we'll warn but carry on.
-                linter_logger.warning(
-                    "Skipping edit patch on uncertain templated section [%s], "
-                    "Please report this warning on GitHub along with the query "
-                    "that produced it.",
-                    (patch.patch_category, patch.source_slice),
-                )
-                continue
-
-        # Sort the patches before building up the file.
-        return sorted(filtered_source_patches, key=lambda x: x.source_slice.start)
 
     @staticmethod
     def _slice_source_file_using_patches(
@@ -529,23 +381,38 @@ class LintedFile(NamedTuple):
                 str_buff += raw_source_string[source_slice]
         return str_buff
 
-    def persist_tree(self, suffix: str = "") -> bool:
+    def persist_tree(
+        self, suffix: str = "", formatter: Optional[FormatterInterface] = None
+    ) -> bool:
         """Persist changes to the given path."""
-        write_buff, success = self.fix_string()
+        if self.num_violations(fixable=True) > 0:
+            write_buff, success = self.fix_string()
 
-        if success:
-            fname = self.path
-            # If there is a suffix specified, then use it.s
-            if suffix:
-                root, ext = os.path.splitext(fname)
-                fname = root + suffix + ext
-            self._safe_create_replace_file(self.path, fname, write_buff, self.encoding)
+            if success:
+                fname = self.path
+                # If there is a suffix specified, then use it.s
+                if suffix:
+                    root, ext = os.path.splitext(fname)
+                    fname = root + suffix + ext
+                self._safe_create_replace_file(
+                    self.path, fname, write_buff, self.encoding
+                )
+                result_label = "FIXED"
+            else:  # pragma: no cover
+                result_label = "FAIL"
+        else:
+            result_label = "SKIP"
+            success = True
+
+        if formatter:
+            formatter.dispatch_persist_filename(filename=self.path, result=result_label)
+
         return success
 
     @staticmethod
     def _safe_create_replace_file(
         input_path: str, output_path: str, write_buff: str, encoding: str
-    ):
+    ) -> None:
         # Write to a temporary file first, so in case of encoding or other
         # issues, we don't delete or corrupt the user's existing file.
 
@@ -563,6 +430,7 @@ class LintedFile(NamedTuple):
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding=encoding,
+            newline="",  # NOTE: No newline conversion. Write as read.
             prefix=basename,
             dir=dirname,
             suffix=os.path.splitext(output_path)[1],

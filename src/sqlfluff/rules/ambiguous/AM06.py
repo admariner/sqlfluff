@@ -1,9 +1,10 @@
 """Implementation of Rule AM06."""
-from typing import Optional, List, Tuple
+
+from typing import List, Optional, Tuple
 
 from sqlfluff.core.rules import BaseRule, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
-from sqlfluff.utils.functional import sp, FunctionalContext
+from sqlfluff.utils.functional import FunctionalContext, sp
 
 
 class Rule_AM06(BaseRule):
@@ -84,8 +85,14 @@ class Rule_AM06(BaseRule):
     aliases = ("L054",)
     groups: Tuple[str, ...] = ("all", "core", "ambiguous")
     config_keywords = ["group_by_and_order_by_style"]
-    crawl_behaviour = SegmentSeekerCrawler({"groupby_clause", "orderby_clause"})
-    _ignore_types: List[str] = ["withingroup_clause", "window_specification"]
+    crawl_behaviour = SegmentSeekerCrawler(
+        {"groupby_clause", "orderby_clause", "grouping_expression_list"}
+    )
+    _ignore_types: List[str] = [
+        "withingroup_clause",
+        "window_specification",
+        "aggregate_order_by",
+    ]
 
     def _eval(self, context: RuleContext) -> Optional[LintResult]:
         """Inconsistent column references in GROUP BY/ORDER BY clauses."""
@@ -93,10 +100,21 @@ class Rule_AM06(BaseRule):
         self.group_by_and_order_by_style: str
 
         # We only care about GROUP BY/ORDER BY clauses.
-        assert context.segment.is_type("groupby_clause", "orderby_clause")
+        assert context.segment.is_type(
+            "groupby_clause", "orderby_clause", "grouping_expression_list"
+        )
 
         # Ignore Windowing clauses
         if FunctionalContext(context).parent_stack.any(sp.is_type(*self._ignore_types)):
+            return LintResult(memory=context.memory)
+
+        # Ignore Array expressions in BigQuery
+        # BigQuery doesn't support implicit ordering inside an array expression,
+        # these aren't going to be caught by ignoring any of the listed types
+        # above.
+        if context.dialect.name == "bigquery" and FunctionalContext(
+            context
+        ).parent_stack.any(sp.is_type("array_expression")):
             return LintResult(memory=context.memory)
 
         # Look at child segments and map column references to either the implicit or
@@ -147,9 +165,9 @@ class Rule_AM06(BaseRule):
                         memory=context.memory,
                     )
 
-                context.memory[
-                    "prior_group_by_order_by_convention"
-                ] = current_group_by_order_by_convention
+                context.memory["prior_group_by_order_by_convention"] = (
+                    current_group_by_order_by_convention
+                )
         else:
             # If explicit or implicit naming then raise lint error
             # if the opposite reference type is detected.

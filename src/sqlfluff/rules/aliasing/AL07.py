@@ -1,13 +1,12 @@
 """Implementation of Rule AL07."""
 
 from collections import Counter, defaultdict
-from typing import Generator, NamedTuple, Optional
+from typing import Generator, List, NamedTuple, Optional
 
-from sqlfluff.core.parser import BaseSegment
+from sqlfluff.core.parser import BaseSegment, IdentifierSegment, SymbolSegment
 from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
-
-from sqlfluff.utils.functional import sp, FunctionalContext
+from sqlfluff.utils.functional import FunctionalContext, sp
 
 
 class TableAliasInfo(NamedTuple):
@@ -34,7 +33,7 @@ class Rule_AL07(BaseRule):
        neither realistic nor desirable. In particular for BigQuery due to the
        complexity of backtick requirements and determining whether a name refers
        to a project or dataset so automated fixes can potentially break working
-       SQL code. For most users :class:`Rule_AL06` is likely a more appropriate
+       SQL code. For most users :sqlfluff:ref:`AL06` is likely a more appropriate
        linting rule to drive a sensible behaviour around aliasing.
 
        The stricter treatment of aliases in this rule may be useful for more
@@ -89,7 +88,7 @@ class Rule_AL07(BaseRule):
     crawl_behaviour = SegmentSeekerCrawler({"select_statement"})
     is_fix_compatible = True
 
-    def _eval(self, context: RuleContext) -> Optional[LintResult]:
+    def _eval(self, context: RuleContext) -> Optional[List[LintResult]]:
         """Identify aliases in from clause and join conditions.
 
         Find base table, table expressions in join, and other expressions in select
@@ -108,7 +107,7 @@ class Rule_AL07(BaseRule):
         # this rule to do the right thing. For now, the rule simply disables
         # itself.
         if not self.force_enable:
-            return LintResult()
+            return None
 
         assert context.segment.is_type("select_statement")
 
@@ -188,7 +187,7 @@ class Rule_AL07(BaseRule):
 
     def _lint_aliases_in_join(
         self, base_table, from_expression_elements, column_reference_segments, segment
-    ):
+    ) -> Optional[List[LintResult]]:
         """Lint and fix all aliases in joins - except for self-joins."""
         # A buffer to keep any violations.
         violation_buff = []
@@ -248,22 +247,28 @@ class Rule_AL07(BaseRule):
             # Fixes for deleting ` as sth` and for editing references to aliased tables
             # Note unparsable errors have cause the delete to fail (see #2484)
             # so check there is a d before doing deletes.
-            fixes = [
-                *[
-                    LintFix.delete(d)
-                    for d in [alias_info.alias_exp_ref, alias_info.whitespace_ref]
-                    if d
-                ],
-                *[
-                    LintFix.replace(
-                        alias,
-                        [alias.edit(alias_info.table_ref.raw)],
-                        source=[alias_info.table_ref],
-                    )
-                    for alias in [alias_info.alias_identifier_ref, *ids_refs]
-                    if alias
-                ],
+            fixes: List[LintFix] = []
+            fixes += [
+                LintFix.delete(d)
+                for d in [alias_info.alias_exp_ref, alias_info.whitespace_ref]
+                if d
             ]
+            for alias in [alias_info.alias_identifier_ref, *ids_refs]:
+                if alias:
+                    identifier_parts = alias_info.table_ref.raw.split(".")
+                    edits: List[BaseSegment] = []
+                    for part in identifier_parts:
+                        if edits:
+                            edits.append(SymbolSegment(".", type="dot"))
+                        edits.append(IdentifierSegment(part, type="naked_identifier"))
+
+                    fixes.append(
+                        LintFix.replace(
+                            alias,
+                            edits,
+                            source=[alias_info.table_ref],
+                        )
+                    )
 
             violation_buff.append(
                 LintResult(

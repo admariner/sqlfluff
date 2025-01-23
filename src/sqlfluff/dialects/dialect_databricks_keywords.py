@@ -1,4 +1,7 @@
-"""A list of databricks reserved keywords."""
+"""A list of databricks reserved keywords.
+
+https://docs.databricks.com/sql/language-manual/sql-ref-reserved-words.html
+"""
 
 RESERVED_KEYWORDS = [
     "ANTI",
@@ -17,4 +20,31 @@ RESERVED_KEYWORDS = [
     "SEMI",
     "UNION",
     "USING",
+]
+
+UNRESERVED_KEYWORDS = [
+    "CATALOG",
+    "COMPENSATION",
+    "CRON",
+    "ENFORCED",
+    "EVOLUTION",
+    "FEATURE",
+    "IDENTIFIER",
+    "MANAGED",
+    "MASK",
+    "NORELY",
+    "OPTIMIZATION",
+    "OPTIMIZE",
+    "PREDICTIVE",
+    "PROVIDER",
+    "PYTHON",
+    "RECIPIENT",
+    "RELY",
+    "SCHEDULE",
+    "SQL",
+    "TAGS",
+    "TIMESERIES",
+    "VOLUME",
+    "VOLUMES",
+    "ZORDER",
 ]

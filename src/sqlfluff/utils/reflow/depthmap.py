@@ -2,12 +2,11 @@
 
 import logging
 from dataclasses import dataclass
-from typing import FrozenSet, List, Sequence, Tuple, Type, Dict
+from typing import Dict, FrozenSet, List, Sequence, Tuple, Type
 
 from sqlfluff.core.parser import BaseSegment
 from sqlfluff.core.parser.segments.base import PathStep
 from sqlfluff.core.parser.segments.raw import RawSegment
-
 
 reflow_logger = logging.getLogger("sqlfluff.rules.reflow")
 
@@ -23,11 +22,18 @@ class StackPosition:
     @staticmethod
     def _stack_pos_interpreter(path_step: PathStep) -> str:
         """Interpret a path step for stack_positions."""
-        if path_step.idx == 0 and path_step.idx == path_step.len - 1:
+        # If no code, then no.
+        if not path_step.code_idxs:
+            return ""
+        # If there's only one code element, this must be it.
+        elif len(path_step.code_idxs) == 1:
             return "solo"
-        elif path_step.idx == 0:
+        # Check for whether first or last code element.
+        # NOTE: code_idxs is always sorted because of how it's constructed.
+        # That means the lowest is always as the start and the highest at the end.
+        elif path_step.idx == path_step.code_idxs[0]:
             return "start"
-        elif path_step.idx == path_step.len - 1:
+        elif path_step.idx == path_step.code_idxs[-1]:
             return "end"
         else:
             return ""  # NOTE: Empty string evaluates as falsy.
@@ -58,16 +64,20 @@ class DepthInfo:
     stack_positions: Dict[int, StackPosition]
 
     @classmethod
-    def from_raw_and_stack(cls, raw: RawSegment, stack: Sequence[PathStep]):
+    def from_raw_and_stack(
+        cls, raw: RawSegment, stack: Sequence[PathStep]
+    ) -> "DepthInfo":
         """Construct from a raw and its stack."""
         stack_hashes = tuple(hash(ps.segment) for ps in stack)
         return cls(
             stack_depth=len(stack),
             stack_hashes=stack_hashes,
             stack_hash_set=frozenset(stack_hashes),
-            stack_class_types=tuple(frozenset(ps.segment.class_types) for ps in stack),
+            stack_class_types=tuple(ps.segment.class_types for ps in stack),
             stack_positions={
-                hash(ps.segment): StackPosition.from_path_step(ps) for ps in stack
+                # Reuse the hash first calculated above.
+                stack_hashes[idx]: StackPosition.from_path_step(ps)
+                for idx, ps in enumerate(stack)
             },
         )
 
@@ -82,7 +92,7 @@ class DepthInfo:
         common_depth = len(common_hashes)
         return self.stack_hashes[:common_depth]
 
-    def trim(self, amount: int):
+    def trim(self, amount: int) -> "DepthInfo":
         """Return a DepthInfo object with some amount trimmed."""
         if amount == 0:
             # The trivial case.
@@ -115,11 +125,8 @@ class DepthMap:
     """
 
     def __init__(self, raws_with_stack: Sequence[Tuple[RawSegment, List[PathStep]]]):
-        # TODO: decide whether we need the raw segments?
-        # self.raw_segments = []
         self.depth_info = {}
         for raw, stack in raws_with_stack:
-            # self.raw_segments.append(raw)
             self.depth_info[raw.uuid] = DepthInfo.from_raw_and_stack(raw, stack)
 
     @classmethod
@@ -162,7 +169,7 @@ class DepthMap:
 
     def copy_depth_info(
         self, anchor: RawSegment, new_segment: RawSegment, trim: int = 0
-    ):
+    ) -> None:
         """Copy the depth info for one segment and apply to another.
 
         This mutates the existing depth map. That's ok because it's

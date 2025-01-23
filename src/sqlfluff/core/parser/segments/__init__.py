@@ -2,34 +2,38 @@
 
 from sqlfluff.core.parser.segments.base import (
     BaseSegment,
-    BaseFileSegment,
-    UnparsableSegment,
-    BracketedSegment,
-    IdentitySet,
-    FixPatch,
     SourceFix,
+    UnparsableSegment,
 )
-from sqlfluff.core.parser.segments.generator import SegmentGenerator
-from sqlfluff.core.parser.segments.raw import (
-    RawSegment,
+from sqlfluff.core.parser.segments.bracketed import BracketedSegment
+from sqlfluff.core.parser.segments.common import (
+    BinaryOperatorSegment,
     CodeSegment,
-    UnlexableSegment,
     CommentSegment,
-    WhitespaceSegment,
+    ComparisonOperatorSegment,
+    CompositeBinaryOperatorSegment,
+    CompositeComparisonOperatorSegment,
+    IdentifierSegment,
+    LiteralSegment,
     NewlineSegment,
-    KeywordSegment,
     SymbolSegment,
+    UnlexableSegment,
+    WhitespaceSegment,
+    WordSegment,
 )
-from sqlfluff.core.parser.segments.ephemeral import EphemeralSegment, allow_ephemeral
+from sqlfluff.core.parser.segments.file import BaseFileSegment
+from sqlfluff.core.parser.segments.generator import SegmentGenerator
+from sqlfluff.core.parser.segments.keyword import KeywordSegment, LiteralKeywordSegment
 from sqlfluff.core.parser.segments.meta import (
-    MetaSegment,
-    Indent,
     Dedent,
-    ImplicitIndent,
-    TemplateSegment,
     EndOfFile,
+    ImplicitIndent,
+    Indent,
+    MetaSegment,
     TemplateLoop,
+    TemplateSegment,
 )
+from sqlfluff.core.parser.segments.raw import RawSegment
 
 __all__ = (
     "BaseSegment",
@@ -44,9 +48,8 @@ __all__ = (
     "WhitespaceSegment",
     "NewlineSegment",
     "KeywordSegment",
+    "LiteralKeywordSegment",
     "SymbolSegment",
-    "EphemeralSegment",
-    "allow_ephemeral",
     "MetaSegment",
     "Indent",
     "Dedent",
@@ -54,7 +57,12 @@ __all__ = (
     "TemplateSegment",
     "EndOfFile",
     "TemplateLoop",
-    "IdentitySet",
-    "FixPatch",
     "SourceFix",
+    "IdentifierSegment",
+    "LiteralSegment",
+    "BinaryOperatorSegment",
+    "CompositeBinaryOperatorSegment",
+    "ComparisonOperatorSegment",
+    "CompositeComparisonOperatorSegment",
+    "WordSegment",
 )

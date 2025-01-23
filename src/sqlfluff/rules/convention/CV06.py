@@ -1,11 +1,9 @@
 """Implementation of Rule CV06."""
+
 from typing import List, NamedTuple, Optional, Sequence, cast
 
-from sqlfluff.core.parser import SymbolSegment
-from sqlfluff.core.parser.segments.base import BaseSegment, IdentitySet
-from sqlfluff.core.parser.segments.raw import NewlineSegment, RawSegment
-
-from sqlfluff.core.rules import BaseRule, LintResult, LintFix, RuleContext
+from sqlfluff.core.parser import BaseSegment, NewlineSegment, RawSegment, SymbolSegment
+from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import RootOnlyCrawler
 from sqlfluff.utils.functional import Segments, sp
 
@@ -61,7 +59,7 @@ class Rule_CV06(BaseRule):
 
     @staticmethod
     def _handle_preceding_inline_comments(
-        before_segment: Sequence[RawSegment], anchor_segment: BaseSegment
+        before_segment: Sequence[BaseSegment], anchor_segment: BaseSegment
     ):
         """Adjust segments to not move preceding inline comments.
 
@@ -76,6 +74,7 @@ class Rule_CV06(BaseRule):
                 for s in before_segment
                 if s.is_comment
                 and not s.is_type("block_comment")
+                and s.pos_marker
                 and s.pos_marker.working_line_no
                 # We don't need to handle the case where raw_segments is empty
                 # because it never is. It's either a segment with raw children
@@ -93,7 +92,9 @@ class Rule_CV06(BaseRule):
         return before_segment, anchor_segment
 
     @staticmethod
-    def _handle_trailing_inline_comments(parent_segment, anchor_segment):
+    def _handle_trailing_inline_comments(
+        parent_segment: BaseSegment, anchor_segment: BaseSegment
+    ) -> BaseSegment:
         """Adjust anchor_segment to not move trailing inline comment.
 
         We don't want to move inline comments that are on the same line
@@ -102,6 +103,8 @@ class Rule_CV06(BaseRule):
         # See if we have a trailing inline comment on the same line as the preceding
         # segment.
         for comment_segment in parent_segment.recursive_crawl("comment"):
+            assert comment_segment.pos_marker
+            assert anchor_segment.pos_marker
             if (
                 comment_segment.pos_marker.working_line_no
                 == anchor_segment.pos_marker.working_line_no
@@ -111,7 +114,9 @@ class Rule_CV06(BaseRule):
         return anchor_segment
 
     @staticmethod
-    def _is_one_line_statement(parent_segment, segment):
+    def _is_one_line_statement(
+        parent_segment: BaseSegment, segment: BaseSegment
+    ) -> bool:
         """Check if the statement containing the provided segment is one line."""
         # Find statement segment containing the current segment.
         statement_segment = next(
@@ -218,10 +223,7 @@ class Rule_CV06(BaseRule):
         # Adjust before_segment and anchor_segment for preceding inline
         # comments. Inline comments can contain noqa logic so we need to add the
         # newline after the inline comment.
-        (
-            before_segment,
-            anchor_segment,
-        ) = self._handle_preceding_inline_comments(
+        (before_segment, anchor_segment) = self._handle_preceding_inline_comments(
             info.before_segment, info.anchor_segment
         )
 
@@ -280,9 +282,7 @@ class Rule_CV06(BaseRule):
             parent_segment, "create_after", anchor_segment, filter_meta=True
         )
         lintfix_fn = LintFix.create_after
-        # :TRICKY: Use IdentitySet rather than set() since
-        # different segments may compare as equal.
-        whitespace_deletion_set = IdentitySet(whitespace_deletions)
+        whitespace_deletion_set = set(whitespace_deletions)
         if anchor_segment in whitespace_deletion_set:
             # Can't delete() and create_after() the same segment. Use replace()
             # instead.
@@ -322,6 +322,8 @@ class Rule_CV06(BaseRule):
             elif not segment.is_meta:
                 before_segment.append(segment)
             trigger_segment = segment
+        else:
+            return None  # File does not contain any statements
         self.logger.debug("Trigger on: %s", trigger_segment)
         self.logger.debug("Anchoring on: %s", anchor_segment)
 

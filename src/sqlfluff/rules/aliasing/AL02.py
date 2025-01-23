@@ -1,8 +1,9 @@
 """Implementation of Rule AL02."""
+
 from typing import Optional
 
-from sqlfluff.rules.aliasing.AL01 import Rule_AL01
 from sqlfluff.core.rules import LintResult, RuleContext
+from sqlfluff.rules.aliasing.AL01 import Rule_AL01
 from sqlfluff.utils.functional import FunctionalContext
 
 
@@ -40,9 +41,7 @@ class Rule_AL02(Rule_AL01):
     config_keywords = ["aliasing"]
     # NB: crawl_behaviour is the same as Rule AL01
 
-    _target_elems = [
-        ("type", "select_clause_element"),
-    ]
+    _target_parent_types = ("select_clause_element",)
 
     def _eval(self, context: RuleContext) -> Optional[LintResult]:
         # T-SQL supports alternative alias expressions for AL02

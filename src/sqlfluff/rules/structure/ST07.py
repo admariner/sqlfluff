@@ -1,16 +1,19 @@
 """Implementation of Rule ST07."""
+
 from typing import List, Optional, Tuple
-from sqlfluff.core.parser.segments.base import BaseSegment
-from sqlfluff.core.parser.segments.raw import (
+
+from sqlfluff.core.parser import (
+    BaseSegment,
+    IdentifierSegment,
     KeywordSegment,
     SymbolSegment,
     WhitespaceSegment,
 )
 from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
-from sqlfluff.utils.functional import Segments, sp, FunctionalContext
+from sqlfluff.dialects.dialect_ansi import ColumnReferenceSegment
 from sqlfluff.utils.analysis.select import get_select_statement_info
-from sqlfluff.dialects.dialect_ansi import ColumnReferenceSegment, IdentifierSegment
+from sqlfluff.utils.functional import FunctionalContext, Segments, sp
 
 
 class Rule_ST07(BaseRule):
@@ -156,7 +159,9 @@ def _extract_cols_from_using(join_clause: Segments, using_segs: Segments) -> Lis
     return using_cols
 
 
-def _generate_join_conditions(table_a_ref: str, table_b_ref: str, columns: List[str]):
+def _generate_join_conditions(
+    table_a_ref: str, table_b_ref: str, columns: List[str]
+) -> List[BaseSegment]:
     edit_segments: List[BaseSegment] = []
     for col in columns:
         edit_segments = edit_segments + [
@@ -209,10 +214,10 @@ def _extract_deletion_sequence_and_anchor(
     return to_delete, insert_anchor
 
 
-def _create_col_reference(table_ref: str, column_name: str):
-    segments = [
+def _create_col_reference(table_ref: str, column_name: str) -> ColumnReferenceSegment:
+    segments = (
         IdentifierSegment(raw=table_ref, type="naked_identifier"),
         SymbolSegment(raw=".", type="symbol"),
         IdentifierSegment(raw=column_name, type="naked_identifier"),
-    ]
+    )
     return ColumnReferenceSegment(segments=segments, pos_marker=None)

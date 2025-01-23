@@ -3,21 +3,22 @@
 Any files in the test/fixtures/dialects/ directory will be picked up
 and automatically tested against the appropriate dialect.
 """
-import logging
+
 from typing import Any, Dict, Optional
+
 import pytest
 
-from sqlfluff.core.templaters import TemplatedFile
-from sqlfluff.core.linter import RenderedFile, ParsedString
 from sqlfluff.core import FluffConfig, Linter
+from sqlfluff.core.linter import ParsedString, RenderedFile
 from sqlfluff.core.parser.segments.base import BaseSegment
+from sqlfluff.core.templaters import TemplatedFile
 
 from ..conftest import (
     compute_parse_tree_hash,
+    get_parse_fixtures,
     load_file,
     make_dialect_path,
     parse_example_file,
-    get_parse_fixtures,
 )
 
 parse_success_examples, parse_structure_examples = get_parse_fixtures(
@@ -32,7 +33,7 @@ def lex_and_parse(config_overrides: Dict[str, Any], raw: str) -> Optional[Parsed
     # Construct rendered file (to skip the templater)
     templated_file = TemplatedFile.from_string(raw)
     rendered_file = RenderedFile(
-        templated_file,
+        [templated_file],
         [],
         config,
         {},
@@ -71,8 +72,12 @@ def test__dialect__base_file_parse(dialect, file):
     # Check we're all there.
     assert parsed.tree.raw == raw
     # Check that there's nothing unparsable
-    typs = parsed.tree.type_set()
-    assert "unparsable" not in typs
+    types = parsed.tree.type_set()
+    assert "unparsable" not in types
+    # When testing the validity of fixes we re-parse sections of the file.
+    # To ensure this is safe - here we re-parse the unfixed file to ensure
+    # it's still valid even in the case that no fixes have been applied.
+    assert parsed.tree.validate_segment_with_reparse(parsed.config.get("dialect_obj"))
 
 
 @pytest.mark.integration
@@ -92,6 +97,9 @@ def test__dialect__base_broad_fix(
     a wide range of test sql examples, and the full range of rules
     to find any potential critical errors raised by any interactions
     between different dialects and rules.
+
+    We also do not use DEBUG logging here because it gets _very_
+    noisy.
     """
     raw = load_file(dialect, file)
     config_overrides = dict(dialect=dialect)
@@ -99,20 +107,18 @@ def test__dialect__base_broad_fix(
     parsed: Optional[ParsedString] = lex_and_parse(config_overrides, raw)
     if not parsed:  # Empty file case
         return
-    else:
-        print(parsed.tree.stringify())
+    print(parsed.tree.stringify())
 
     config = FluffConfig(overrides=config_overrides)
     linter = Linter(config=config)
     rule_pack = linter.get_rulepack()
     # Due to "raise_critical_errors_after_fix" fixture "fix",
     # will now throw.
-    with caplog.at_level(logging.DEBUG, logger="sqlfluff.rules"):
-        linter.lint_parsed(
-            parsed,
-            rule_pack,
-            fix=True,
-        )
+    linter.lint_parsed(
+        parsed,
+        rule_pack,
+        fix=True,
+    )
 
 
 @pytest.mark.integration

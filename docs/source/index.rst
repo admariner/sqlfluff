@@ -14,6 +14,10 @@ Notable releases:
   :code:`sqlfluff format` and removal of support for dbt versions pre `1.1`.
   Note, that this release brings with it some breaking changes to rule coding
   and configuration, see :ref:`upgrading_2_0`.
+* **3.0.x**: :code:`sqlfluff fix` now defaults to *not* asking for confirmation
+  and the `--force` option was removed. Richer information returned by the
+  :code:`sqlfluff lint` command (although in a different structure to previous
+  versions). See :ref:`upgrading_3_0`.
 
 For more detail on other releases, see our :ref:`releasenotes`.
 
@@ -46,7 +50,7 @@ have python or pip already installed see :ref:`gettingstartedref`.
     L:   1 | P:  27 | LT01 | Unnecessary trailing whitespace at end of file.
                            | [layout.spacing]
     L:   1 | P:  27 | LT12 | Files must end with a single trailing newline.
-                           | [layout.end-of-file]
+                           | [layout.end_of_file]
     All Finished 📜 🎉!
 
 Contents
@@ -57,20 +61,11 @@ Contents
    :caption: Documentation for SQLFluff:
 
    gettingstarted
-   realworld
-   vision
-   teamrollout
-   layout
-   rules
-   dialects
-   production
-   configuration
-   cli
-   api
-   releasenotes
-   internals
-   developingrules
-   developingplugins
+   why_sqlfluff
+   guides/index
+   configuration/index
+   production/index
+   reference/index
    inthewild
    jointhecommunity
 

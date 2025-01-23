@@ -4,11 +4,11 @@ from typing import Optional
 
 import regex
 
-from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
-from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
-from sqlfluff.utils.functional import rsp, FunctionalContext
+from sqlfluff.core.parser import LiteralSegment
 from sqlfluff.core.parser.markers import PositionMarker
-from sqlfluff.dialects.dialect_ansi import LiteralSegment
+from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
+from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
+from sqlfluff.utils.functional import FunctionalContext, rsp
 
 
 class Rule_CV10(BaseRule):
@@ -145,9 +145,9 @@ class Rule_CV10(BaseRule):
                     if context.segment.raw[-1] == '"'
                     else "single_quotes"
                 )
-                memory[
-                    "preferred_quoted_literal_style"
-                ] = preferred_quoted_literal_style
+                memory["preferred_quoted_literal_style"] = (
+                    preferred_quoted_literal_style
+                )
                 self.logger.debug(
                     "Preferred string quotes is set to `consistent`. Derived quoting "
                     "style %s from first quoted literal.",
@@ -167,6 +167,12 @@ class Rule_CV10(BaseRule):
         )
 
         if fixed_string != context.segment.raw:
+            # We can't just set the primary type, but we have to ensure that the
+            # subtypes are properly set too so that the re-parse checks pass.
+            if fixed_string[0] == "'":
+                _instance_types = ("quoted_literal", "single_quote")
+            else:
+                _instance_types = ("quoted_literal", "double_quote")
             return LintResult(
                 anchor=context.segment,
                 memory=context.memory,
@@ -176,7 +182,7 @@ class Rule_CV10(BaseRule):
                         [
                             LiteralSegment(
                                 raw=fixed_string,
-                                type="quoted_literal",
+                                instance_types=_instance_types,
                             )
                         ],
                     )

@@ -1,20 +1,32 @@
 """Defines the templaters."""
 
 import ast
+import re
 from string import Formatter
-from typing import Iterable, Dict, Tuple, List, Iterator, Optional, NamedTuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+)
 
+from sqlfluff.core.config import FluffConfig
 from sqlfluff.core.errors import SQLTemplaterError
-from sqlfluff.core.string_helpers import findall
-from sqlfluff.core.slice_helpers import offset_slice, zero_slice
-
+from sqlfluff.core.formatter import FormatterInterface
+from sqlfluff.core.helpers.slice import offset_slice, zero_slice
+from sqlfluff.core.helpers.string import findall
 from sqlfluff.core.templaters.base import (
+    RawFileSlice,
     RawTemplater,
     TemplatedFile,
-    templater_logger,
-    RawFileSlice,
     TemplatedFileSlice,
     large_file_check,
+    templater_logger,
 )
 
 
@@ -125,7 +137,7 @@ class IntermediateFileSlice(NamedTuple):
         # Return
         return head_buffer, new_slice, tail_buffer
 
-    def try_simple(self):
+    def try_simple(self) -> TemplatedFileSlice:
         """Try to turn this intermediate slice into a simple slice."""
         # Yield anything simple
         if len(self.slice_buffer) == 1:
@@ -137,7 +149,7 @@ class IntermediateFileSlice(NamedTuple):
         else:
             raise ValueError("IntermediateFileSlice is not simple!")
 
-    def coalesce(self):
+    def coalesce(self) -> TemplatedFileSlice:
         """Coalesce this whole slice into a single one. Brutally."""
         return TemplatedFileSlice(
             PythonTemplater._coalesce_types(self.slice_buffer),
@@ -159,13 +171,14 @@ class PythonTemplater(RawTemplater):
     """
 
     name = "python"
+    config_subsection: Tuple[str, ...] = ("context",)
 
-    def __init__(self, override_context=None, **kwargs):
+    def __init__(self, override_context: Optional[Dict[str, Any]] = None) -> None:
         self.default_context = dict(test_value="__test__")
         self.override_context = override_context or {}
 
     @staticmethod
-    def infer_type(s):
+    def infer_type(s: Any) -> Any:
         """Infer a python type from a string and convert.
 
         Given a string value, convert it to a more specific built-in Python type
@@ -177,32 +190,41 @@ class PythonTemplater(RawTemplater):
         except (SyntaxError, ValueError):
             return s
 
-    def get_context(self, fname=None, config=None, **kw) -> Dict:
-        """Get the templating context from the config."""
-        # TODO: The config loading should be done outside the templater code. Here
-        # is a silly place.
-        if config:
-            # This is now a nested section
-            loaded_context = (
-                config.get_section((self.templater_selector, self.name, "context"))
-                or {}
-            )
-        else:
-            loaded_context = {}
-        live_context = {}
-        live_context.update(self.default_context)
-        live_context.update(loaded_context)
-        live_context.update(self.override_context)
+    def get_context(
+        self,
+        fname: Optional[str],
+        config: Optional[FluffConfig],
+    ) -> Dict[str, Any]:
+        """Get the templating context from the config.
 
+        This function retrieves the templating context from the config by
+        loading the config and updating the live_context dictionary with the
+        loaded_context and other predefined context dictionaries. It then goes
+        through the loaded_context dictionary and infers the types of the values
+        before returning the live_context dictionary.
+
+        Args:
+            fname (str, optional): The file name.
+            config (dict, optional): The config dictionary.
+
+        Returns:
+            dict: The templating context.
+        """
+        live_context = super().get_context(fname, config)
         # Infer types
-        for k in loaded_context:
+        for k in live_context:
             live_context[k] = self.infer_type(live_context[k])
         return live_context
 
     @large_file_check
     def process(
-        self, *, in_str: str, fname: str, config=None, formatter=None
-    ) -> Tuple[Optional[TemplatedFile], list]:
+        self,
+        *,
+        in_str: str,
+        fname: str,
+        config: Optional[FluffConfig] = None,
+        formatter: Optional[FormatterInterface] = None,
+    ) -> Tuple[TemplatedFile, List[SQLTemplaterError]]:
         """Process a string and return a TemplatedFile.
 
         Note that the arguments are enforced as keywords
@@ -222,17 +244,60 @@ class PythonTemplater(RawTemplater):
             formatter (:obj:`CallbackFormatter`): Optional object for output.
 
         """
-        live_context = self.get_context(fname=fname, config=config)
-        try:
-            new_str = in_str.format(**live_context)
-        except KeyError as err:
-            # TODO: Add a url here so people can get more help.
-            raise SQLTemplaterError(
-                "Failure in Python templating: {}. Have you configured your "
-                "variables?".format(err)
-            )
+        live_context = self.get_context(fname, config)
+
+        def render_func(raw_str: str) -> str:
+            """Render the string using the captured live_context.
+
+            In order to support mocking of template variables
+            containing "." characters, this function converts any
+            template variable containing "." into a dictionary lookup.
+                Example:  {foo.bar} => {sqlfluff[foo.bar]}
+            """
+            try:
+                # Hack to allow template variables with dot notation (e.g. foo.bar)
+                raw_str_with_dot_notation_hack = re.sub(
+                    r"{([^:}]*\.[^:}]*)(:\S*)?}", r"{sqlfluff[\1]\2}", raw_str
+                )
+                templater_logger.debug(
+                    "    Raw String with Dot Notation Hack: %r",
+                    raw_str_with_dot_notation_hack,
+                )
+                rendered_str = raw_str_with_dot_notation_hack.format(**live_context)
+            except KeyError as err:
+                missing_key = err.args[0]
+                if missing_key == "sqlfluff":
+                    # Give more useful error message related to dot notation hack
+                    # when user has not created the required, magic context key
+                    raise SQLTemplaterError(
+                        "Failure in Python templating: magic key 'sqlfluff' "
+                        "missing from context.  This key is required "
+                        "for template variables containing '.'. "
+                        "https://docs.sqlfluff.com/en/stable/"
+                        "perma/python_templating.html"
+                    )
+                elif "." in missing_key:
+                    # Give more useful error message related to dot notation hack
+                    # for missing keys
+                    raise SQLTemplaterError(
+                        "Failure in Python templating: {} key missing from 'sqlfluff' "
+                        "dict in context. Template variables containing '.' are "
+                        "required to use the 'sqlfluff' magic fixed context key. "
+                        "https://docs.sqlfluff.com/en/stable/"
+                        "perma/python_templating.html".format(err)
+                    )
+                else:
+                    raise SQLTemplaterError(
+                        "Failure in Python templating: {}. Have you configured your "
+                        "variables? https://docs.sqlfluff.com/en/stable/"
+                        "perma/variables.html".format(err)
+                    )
+            return rendered_str
+
         raw_sliced, sliced_file, new_str = self.slice_file(
-            in_str, new_str, config=config
+            in_str,
+            render_func=render_func,
+            config=config,
         )
         return (
             TemplatedFile(
@@ -246,11 +311,20 @@ class PythonTemplater(RawTemplater):
         )
 
     def slice_file(
-        self, raw_str: str, templated_str: str, config=None, **kwargs
+        self,
+        raw_str: str,
+        render_func: Callable[[str], str],
+        config: Optional[FluffConfig] = None,
+        append_to_templated: str = "",
     ) -> Tuple[List[RawFileSlice], List[TemplatedFileSlice], str]:
         """Slice the file to determine regions where we can fix."""
         templater_logger.info("Slicing File Template")
         templater_logger.debug("    Raw String: %r", raw_str)
+        # Render the templated string.
+        # NOTE: This seems excessive in this simple example, but for other templating
+        # engines we need more control over the rendering so may need to call this
+        # method more than once.
+        templated_str = render_func(raw_str)
         templater_logger.debug("    Templated String: %r", templated_str)
         # Slice the raw file
         raw_sliced = list(self._slice_template(raw_str))
@@ -323,7 +397,8 @@ class PythonTemplater(RawTemplater):
     ) -> Tuple[List[TemplatedFileSlice], str]:
         """Identify a wrapped query (e.g. dbt test) and handle it.
 
-        If unwrap_wrapped is true, we trim the wrapping from the templated file.
+        If unwrap_wrapped is true, we trim the wrapping from the templated
+        file.
         If unwrap_wrapped is false, we add a slice at start and end.
         """
         if not slices:
@@ -386,7 +461,7 @@ class PythonTemplater(RawTemplater):
 
     @staticmethod
     def _sorted_occurrence_tuples(
-        occurrences: Dict[str, List[int]]
+        occurrences: Dict[str, List[int]],
     ) -> List[Tuple[str, int]]:
         """Sort a dict of occurrences into a sorted list of tuples."""
         return sorted(

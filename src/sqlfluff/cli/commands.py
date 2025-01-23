@@ -1,53 +1,44 @@
 """Contains the CLI."""
 
-from itertools import chain
-import os
-import sys
 import json
 import logging
+import os
+import sys
 import time
+from itertools import chain
 from logging import LogRecord
-from typing import Callable, Tuple, Optional, cast
-
-import yaml
+from typing import Callable, Optional, Tuple
 
 import click
 
-# For the profiler
-import pstats
-from io import StringIO
-
 # To enable colour cross platform
 import colorama
+import yaml
 from tqdm import tqdm
-from sqlfluff.cli.autocomplete import shell_completion_enabled, dialect_shell_complete
 
-from sqlfluff.cli import EXIT_SUCCESS, EXIT_ERROR, EXIT_FAIL
-from sqlfluff.cli.click_deprecated_option import (
-    DeprecatedOption,
-    DeprecatedOptionsCommand,
-)
+from sqlfluff.cli import EXIT_ERROR, EXIT_FAIL, EXIT_SUCCESS
+from sqlfluff.cli.autocomplete import dialect_shell_complete, shell_completion_enabled
 from sqlfluff.cli.formatters import (
-    format_linting_result_header,
     OutputStreamFormatter,
+    format_linting_result_header,
 )
-from sqlfluff.cli.helpers import get_package_version
-from sqlfluff.cli.outputstream import make_output_stream, OutputStream
+from sqlfluff.cli.helpers import LazySequence, get_package_version
+from sqlfluff.cli.outputstream import OutputStream, make_output_stream
 
 # Import from sqlfluff core.
 from sqlfluff.core import (
-    Linter,
     FluffConfig,
+    Linter,
+    SQLFluffUserError,
     SQLLintError,
     SQLTemplaterError,
-    SQLFluffUserError,
-    dialect_selector,
     dialect_readout,
+    dialect_selector,
 )
 from sqlfluff.core.config import progress_bar_configuration
-
-from sqlfluff.core.enums import FormatType, Color
+from sqlfluff.core.linter import LintingResult
 from sqlfluff.core.plugin.host import get_plugin_manager
+from sqlfluff.core.types import Color, FormatType
 
 
 class StreamHandlerTqdm(logging.StreamHandler):
@@ -137,20 +128,21 @@ def set_logging_level(
 class PathAndUserErrorHandler:
     """Make an API call but with error handling for the CLI."""
 
-    def __init__(self, formatter):
+    def __init__(self, formatter: OutputStreamFormatter) -> None:
         self.formatter = formatter
 
-    def __enter__(self):
+    def __enter__(self) -> "PathAndUserErrorHandler":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is SQLFluffUserError:
             click.echo(
                 "\nUser Error: "
                 + self.formatter.colorize(
                     str(exc_val),
                     Color.red,
-                )
+                ),
+                err=True,
             )
             sys.exit(EXIT_ERROR)
 
@@ -212,12 +204,15 @@ def core_options(f: Callable) -> Callable:
         default=None,
         help="The templater to use (default=jinja)",
         type=click.Choice(
-            [
-                templater.name
-                for templater in chain.from_iterable(
-                    get_plugin_manager().hook.get_templaters()
-                )
-            ]
+            # Use LazySequence so that we don't load templaters until required.
+            LazySequence(
+                lambda: [
+                    templater.name
+                    for templater in chain.from_iterable(
+                        get_plugin_manager().hook.get_templaters()
+                    )
+                ]
+            )
         ),
     )(f)
     f = click.option(
@@ -308,6 +303,32 @@ def core_options(f: Callable) -> Callable:
         default=None,
         help="Set this flag to ignore inline noqa comments.",
     )(f)
+    f = click.option(
+        "--disable-noqa-except",
+        default=None,
+        help="Ignore all but the listed rules inline noqa comments.",
+    )(f)
+    f = click.option(
+        "--library-path",
+        default=None,
+        help=(
+            "Override the `library_path` value from the [sqlfluff:templater:jinja]"
+            " configuration value. Set this to 'none' to disable entirely."
+            " This overrides any values set by users in configuration files or"
+            " inline directives."
+        ),
+    )(f)
+    f = click.option(
+        "--stdin-filename",
+        default=None,
+        help=(
+            "When using stdin as an input, load the configuration as if the contents"
+            " of stdin was in a file in the listed location."
+            " This is useful for some editors that pass file contents from the editor"
+            " that might not match the content on disk."
+        ),
+        type=click.Path(allow_dash=False),
+    )(f)
     return f
 
 
@@ -328,12 +349,25 @@ def lint_options(f: Callable) -> Callable:
         ),
     )(f)
     f = click.option(
-        "--disable_progress_bar",
         "--disable-progress-bar",
         is_flag=True,
         help="Disables progress bars.",
-        cls=DeprecatedOption,
-        deprecated=["--disable_progress_bar"],
+    )(f)
+    f = click.option(
+        "--persist-timing",
+        default=None,
+        help=(
+            "A filename to persist the timing information for a linting run to "
+            "in csv format for external analysis. NOTE: This feature should be "
+            "treated as beta, and the format of the csv file may change in "
+            "future releases without warning."
+        ),
+    )(f)
+    f = click.option(
+        "--warn-unused-ignores",
+        is_flag=True,
+        default=False,
+        help="Warn about unneeded '-- noqa:' comments.",
     )(f)
     return f
 
@@ -368,17 +402,28 @@ def get_config(
                 )
             )
             sys.exit(EXIT_ERROR)
-    from_root_kwargs = {}
-    if "require_dialect" in kwargs:
-        from_root_kwargs["require_dialect"] = kwargs.pop("require_dialect")
+
+    library_path = kwargs.pop("library_path", None)
+
+    if not kwargs.get("warn_unused_ignores", True):
+        # If it's present AND True, then keep it, otherwise remove this so
+        # that we default to the root config.
+        del kwargs["warn_unused_ignores"]
+
     # Instantiate a config object (filtering out the nulls)
     overrides = {k: kwargs[k] for k in kwargs if kwargs[k] is not None}
+    if library_path is not None:
+        # Check for a null value
+        if library_path.lower() == "none":
+            library_path = None  # Set an explicit None value.
+        # Set the global override
+        overrides["library_path"] = library_path
     try:
         return FluffConfig.from_root(
             extra_config_path=extra_config_path,
             ignore_local_config=ignore_local_config,
             overrides=overrides,
-            **from_root_kwargs,
+            require_dialect=kwargs.pop("require_dialect", True),
         )
     except SQLFluffUserError as err:  # pragma: no cover
         click.echo(
@@ -392,7 +437,9 @@ def get_config(
 
 
 def get_linter_and_formatter(
-    cfg: FluffConfig, output_stream: Optional[OutputStream] = None
+    cfg: FluffConfig,
+    output_stream: Optional[OutputStream] = None,
+    show_lint_violations: bool = False,
 ) -> Tuple[Linter, OutputStreamFormatter]:
     """Get a linter object given a config."""
     try:
@@ -409,21 +456,27 @@ def get_linter_and_formatter(
         nocolor=cfg.get("nocolor"),
         verbosity=cfg.get("verbose"),
         output_line_length=cfg.get("output_line_length"),
+        show_lint_violations=show_lint_violations,
     )
     return Linter(config=cfg, formatter=formatter), formatter
 
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
-    epilog="""\b\bExamples:\n
-  sqlfluff lint --dialect postgres .\n
-  sqlfluff lint --dialect postgres --rules ST05 .\n
-  sqlfluff fix --dialect sqlite --rules LT10,ST05 src/queries\n
-  sqlfluff parse --dialect sqlite --templater jinja src/queries/common.sql
+    # NOTE: The code-block directive here looks a little odd in the CLI
+    # but is a good balance between what appears in the CLI and what appears
+    # in the auto generated docs for the CLI by sphinx.
+    epilog="""Examples:\n
+.. code-block:: sh
+
+   sqlfluff lint --dialect postgres .\n
+   sqlfluff lint --dialect mysql --rules ST05 my_query.sql\n
+   sqlfluff fix --dialect sqlite --rules LT10,ST05 src/queries\n
+   sqlfluff parse --dialect duckdb --templater jinja path/my_query.sql\n\n
 """,
 )
 @click.version_option()
-def cli():
+def cli() -> None:
     """SQLFluff is a modular SQL linter for humans."""  # noqa D403
 
 
@@ -473,7 +526,7 @@ def dialects(**kwargs) -> None:
     click.echo(formatter.format_dialects(dialect_readout), color=c.get("color"))
 
 
-def dump_file_payload(filename: Optional[str], payload: str):
+def dump_file_payload(filename: Optional[str], payload: str) -> None:
     """Write the output file content to stdout or file."""
     # If there's a file specified to write to, write to it.
     if filename:
@@ -484,7 +537,7 @@ def dump_file_payload(filename: Optional[str], payload: str):
         click.echo(payload)
 
 
-@cli.command(cls=DeprecatedOptionsCommand)
+@cli.command()
 @common_options
 @core_options
 @lint_options
@@ -506,11 +559,13 @@ def dump_file_payload(filename: Optional[str], payload: str):
 )
 @click.option(
     "--annotation-level",
-    default="notice",
+    default="warning",
     type=click.Choice(["notice", "warning", "failure", "error"], case_sensitive=False),
     help=(
-        "When format is set to github-annotation or github-annotation-native, "
-        "default annotation level (default=notice). failure and error are equivalent."
+        'When format is set to "github-annotation" or "github-annotation-native", '
+        'default annotation level (default="warning"). "failure" and "error" '
+        "are equivalent. Any rules configured only as warnings will always come "
+        'through with type "notice" regardless of this option.'
     ),
 )
 @click.option(
@@ -526,16 +581,6 @@ def dump_file_payload(filename: Optional[str], payload: str):
     is_flag=True,
     help="Perform the operation regardless of .sqlfluffignore configurations",
 )
-@click.option(
-    "--persist-timing",
-    default=None,
-    help=(
-        "A filename to persist the timing information for a linting run to "
-        "in csv format for external analysis. NOTE: This feature should be "
-        "treated as beta, and the format of the csv file may change in "
-        "future releases without warning."
-    ),
-)
 @click.argument("paths", nargs=-1, type=click.Path(allow_dash=True))
 def lint(
     paths: Tuple[str],
@@ -548,9 +593,10 @@ def lint(
     bench: bool = False,
     processes: Optional[int] = None,
     disable_progress_bar: Optional[bool] = False,
+    persist_timing: Optional[str] = None,
     extra_config_path: Optional[str] = None,
     ignore_local_config: bool = False,
-    persist_timing: Optional[str] = None,
+    stdin_filename: Optional[str] = None,
     **kwargs,
 ) -> None:
     """Lint SQL files via passing a list of files or using stdin.
@@ -599,6 +645,8 @@ def lint(
     with PathAndUserErrorHandler(formatter):
         # add stdin if specified via lone '-'
         if ("-",) == paths:
+            if stdin_filename:
+                lnt.config = lnt.config.make_child_from_path(stdin_filename)
             result = lnt.lint_string_wrapped(sys.stdin.read(), fname="stdin")
         else:
             result = lnt.lint_paths(
@@ -606,6 +654,9 @@ def lint(
                 ignore_non_existent_files=False,
                 ignore_files=not disregard_sqlfluffignores,
                 processes=processes,
+                # If we're just linting in the CLI, we don't need to retain the
+                # raw file content. This allows us to reduce memory overhead.
+                retain_files=False,
             )
 
     # Output the final stats
@@ -615,7 +666,13 @@ def lint(
     if format == FormatType.json.value:
         file_output = json.dumps(result.as_records())
     elif format == FormatType.yaml.value:
-        file_output = yaml.dump(result.as_records(), sort_keys=False)
+        file_output = yaml.dump(
+            result.as_records(),
+            sort_keys=False,
+            allow_unicode=True,
+        )
+    elif format == FormatType.none.value:
+        file_output = ""
     elif format == FormatType.github_annotation.value:
         if annotation_level == "error":
             annotation_level = "failure"
@@ -631,12 +688,27 @@ def lint(
                 github_result.append(
                     {
                         "file": filepath,
-                        "line": violation["line_no"],
-                        "start_column": violation["line_pos"],
-                        "end_column": violation["line_pos"],
+                        "start_line": violation["start_line_no"],
+                        "start_column": violation["start_line_pos"],
+                        # NOTE: There should always be a start, there _may_ not be an
+                        # end, so in that case we default back to just re-using
+                        # the start.
+                        "end_line": violation.get(
+                            "end_line_no", violation["start_line_no"]
+                        ),
+                        "end_column": violation.get(
+                            "end_line_pos", violation["start_line_pos"]
+                        ),
                         "title": "SQLFluff",
                         "message": f"{violation['code']}: {violation['description']}",
-                        "annotation_level": annotation_level,
+                        # The annotation_level is configurable, but will only apply
+                        # to any SQLFluff rules which have not been downgraded
+                        # to warnings using the `warnings` config value. Any which have
+                        # been set to warn rather than fail will always be given the
+                        # `notice` annotation level in the serialised result.
+                        "annotation_level": (
+                            annotation_level if not violation["warning"] else "notice"
+                        ),
                     }
                 )
         file_output = json.dumps(github_result)
@@ -647,14 +719,30 @@ def lint(
         github_result_native = []
         for record in result.as_records():
             filepath = record["filepath"]
+
+            # Add a group, titled with the filename
+            if record["violations"]:
+                github_result_native.append(f"::group::{filepath}")
+
             for violation in record["violations"]:
                 # NOTE: The output format is designed for GitHub action:
                 # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-a-notice-message
-                line = f"::{annotation_level} "
+
+                # The annotation_level is configurable, but will only apply
+                # to any SQLFluff rules which have not been downgraded
+                # to warnings using the `warnings` config value. Any which have
+                # been set to warn rather than fail will always be given the
+                # `notice` annotation level in the serialised result.
+                line = "::notice " if violation["warning"] else f"::{annotation_level} "
+
                 line += "title=SQLFluff,"
                 line += f"file={filepath},"
-                line += f"line={violation['line_no']},"
-                line += f"col={violation['line_pos']}"
+                line += f"line={violation['start_line_no']},"
+                line += f"col={violation['start_line_pos']}"
+                if "end_line_no" in violation:
+                    line += f",endLine={violation['end_line_no']}"
+                if "end_line_pos" in violation:
+                    line += f",endColumn={violation['end_line_pos']}"
                 line += "::"
                 line += f"{violation['code']}: {violation['description']}"
                 if violation["name"]:
@@ -662,10 +750,14 @@ def lint(
 
                 github_result_native.append(line)
 
+            # Close the group
+            if record["violations"]:
+                github_result_native.append("::endgroup::")
+
         file_output = "\n".join(github_result_native)
 
     if file_output:
-        dump_file_payload(write_output, cast(str, file_output))
+        dump_file_payload(write_output, file_output)
 
     if persist_timing:
         result.persist_timing_records(persist_timing)
@@ -677,22 +769,34 @@ def lint(
         timing_summary = result.timing_summary()
         for step in timing_summary:
             click.echo(f"=== {step} ===")
-            click.echo(formatter.cli_table(timing_summary[step].items()))
+            click.echo(
+                formatter.cli_table(timing_summary[step].items(), cols=3, col_width=20)
+            )
 
     if not nofail:
         if not non_human_output:
             formatter.completion_message()
-        sys.exit(result.stats()["exit code"])
+        exit_code = result.stats(EXIT_FAIL, EXIT_SUCCESS)["exit code"]
+        assert isinstance(exit_code, int), "result.stats error code must be integer."
+        sys.exit(exit_code)
     else:
         sys.exit(EXIT_SUCCESS)
 
 
-def do_fixes(lnt, result, formatter=None, **kwargs):
+def do_fixes(
+    result: LintingResult,
+    formatter: Optional[OutputStreamFormatter] = None,
+    fixed_file_suffix: str = "",
+) -> bool:
     """Actually do the fixes."""
-    click.echo("Persisting Changes...")
-    res = result.persist_changes(formatter=formatter, **kwargs)
+    if formatter and formatter.verbosity >= 0:
+        click.echo("Persisting Changes...")
+    res = result.persist_changes(
+        formatter=formatter, fixed_file_suffix=fixed_file_suffix
+    )
     if all(res.values()):
-        click.echo("Done. Please check your files to confirm.")
+        if formatter and formatter.verbosity >= 0:
+            click.echo("Done. Please check your files to confirm.")
         return True
     # If some failed then return false
     click.echo(
@@ -704,7 +808,38 @@ def do_fixes(lnt, result, formatter=None, **kwargs):
     return False  # pragma: no cover
 
 
-def _stdin_fix(linter, formatter, fix_even_unparsable):
+def _handle_unparsable(
+    fix_even_unparsable: bool,
+    initial_exit_code: int,
+    linting_result: LintingResult,
+    formatter: OutputStreamFormatter,
+):
+    """Handles the treatment of files with templating and parsing issues.
+
+    By default, any files with templating or parsing errors shouldn't have
+    fixes attempted - because we can't guarantee the validity of the fixes.
+
+    This method returns 1 if there are any files with templating or parse errors after
+    filtering, else 0 (Intended as a process exit code). If `fix_even_unparsable` is
+    set then it just returns whatever the pre-existing exit code was.
+
+    NOTE: This method mutates the LintingResult so that future use of the object
+    has updated violation counts which can be used for other exit code calcs.
+    """
+    if fix_even_unparsable:
+        # If we're fixing even when unparsable, don't perform any filtering.
+        return initial_exit_code
+    total_errors, num_filtered_errors = linting_result.count_tmp_prs_errors()
+    linting_result.discard_fixes_for_lint_errors_in_files_with_tmp_or_prs_errors()
+    formatter.print_out_residual_error_counts(
+        total_errors, num_filtered_errors, force_stderr=True
+    )
+    return EXIT_FAIL if num_filtered_errors else EXIT_SUCCESS
+
+
+def _stdin_fix(
+    linter: Linter, formatter: OutputStreamFormatter, fix_even_unparsable: bool
+) -> None:
     """Handle fixing from stdin."""
     exit_code = EXIT_SUCCESS
     stdin = sys.stdin.read()
@@ -712,8 +847,8 @@ def _stdin_fix(linter, formatter, fix_even_unparsable):
     result = linter.lint_string_wrapped(stdin, fname="stdin", fix=True)
     templater_error = result.num_violations(types=SQLTemplaterError) > 0
     unfixable_error = result.num_violations(types=SQLLintError, fixable=False) > 0
-    if not fix_even_unparsable:
-        exit_code = formatter.handle_files_with_tmp_or_prs_errors(result)
+
+    exit_code = _handle_unparsable(fix_even_unparsable, exit_code, result, formatter)
 
     if result.num_violations(types=SQLLintError, fixable=True) > 0:
         stdout = result.paths[0].files[0].fix_string()[0]
@@ -747,69 +882,69 @@ def _stdin_fix(linter, formatter, fix_even_unparsable):
 
 
 def _paths_fix(
-    linter,
-    formatter,
+    linter: Linter,
+    formatter: OutputStreamFormatter,
     paths,
     processes,
     fix_even_unparsable,
-    force,
     fixed_suffix,
     bench,
     show_lint_violations,
-    warn_force: bool = True,
-):
+    check: bool = False,
+    persist_timing: Optional[str] = None,
+) -> None:
     """Handle fixing from paths."""
     # Lint the paths (not with the fix argument at this stage), outputting as we go.
-    click.echo("==== finding fixable violations ====")
+    if formatter.verbosity >= 0:
+        click.echo("==== finding fixable violations ====")
     exit_code = EXIT_SUCCESS
 
     with PathAndUserErrorHandler(formatter):
-        result = linter.lint_paths(
+        result: LintingResult = linter.lint_paths(
             paths,
             fix=True,
             ignore_non_existent_files=False,
             processes=processes,
+            # If --check is set, then don't apply any fixes until the end.
+            apply_fixes=not check,
+            fixed_file_suffix=fixed_suffix,
+            fix_even_unparsable=fix_even_unparsable,
+            # If --check is not set, then don't apply any fixes until the end.
+            # NOTE: This should enable us to limit the memory overhead of keeping
+            # a large parsed project in memory unless necessary.
+            retain_files=check,
         )
 
-    if not fix_even_unparsable:
-        exit_code = formatter.handle_files_with_tmp_or_prs_errors(result)
+    exit_code = _handle_unparsable(fix_even_unparsable, exit_code, result, formatter)
 
     # NB: We filter to linting violations here, because they're
     # the only ones which can be potentially fixed.
-    if result.num_violations(types=SQLLintError, fixable=True) > 0:
-        click.echo("==== fixing violations ====")
-        click.echo(
-            f"{result.num_violations(types=SQLLintError, fixable=True)} fixable "
-            "linting violations found"
-        )
-        if force:
-            if warn_force:
-                click.echo(
-                    f"{formatter.colorize('FORCE MODE', Color.red)}: "
-                    "Attempting fixes..."
-                )
-            success = do_fixes(
-                linter,
-                result,
-                formatter,
-                types=SQLLintError,
-                fixed_file_suffix=fixed_suffix,
-            )
-            if not success:
-                sys.exit(EXIT_FAIL)  # pragma: no cover
-        else:
+    violation_records = result.as_records()
+    num_fixable = sum(
+        # Coerce to boolean so that we effectively count the ones which have fixes.
+        bool(v.get("fixes", []))
+        for rec in violation_records
+        for v in rec["violations"]
+    )
+
+    if num_fixable > 0:
+        if check and formatter.verbosity >= 0:
+            click.echo("==== fixing violations ====")
+
+        click.echo(f"{num_fixable} " "fixable linting violations found")
+
+        if check:
             click.echo(
                 "Are you sure you wish to attempt to fix these? [Y/n] ", nl=False
             )
             c = click.getchar().lower()
             click.echo("...")
             if c in ("y", "\r", "\n"):
-                click.echo("Attempting fixes...")
+                if formatter.verbosity >= 0:
+                    click.echo("Attempting fixes...")
                 success = do_fixes(
-                    linter,
                     result,
                     formatter,
-                    types=SQLLintError,
                     fixed_file_suffix=fixed_suffix,
                 )
                 if not success:
@@ -824,21 +959,14 @@ def _paths_fix(
                 click.echo("Aborting...")
                 exit_code = EXIT_FAIL
     else:
-        click.echo("==== no fixable linting violations found ====")
-        formatter.completion_message()
+        if formatter.verbosity >= 0:
+            click.echo("==== no fixable linting violations found ====")
+            formatter.completion_message()
 
-    error_types = [
-        (
-            dict(types=SQLLintError, fixable=False),
-            "  [{} unfixable linting violations found]",
-            EXIT_FAIL,
-        ),
-    ]
-    for num_violations_kwargs, message_format, error_level in error_types:
-        num_violations = result.num_violations(**num_violations_kwargs)
-        if num_violations > 0:
-            click.echo(message_format.format(num_violations))
-            exit_code = max(exit_code, error_level)
+    num_unfixable = sum(p.num_unfixable_lint_errors for p in result.paths)
+    if num_unfixable > 0 and formatter.verbosity >= 0:
+        click.echo("  [{} unfixable linting violations found]".format(num_unfixable))
+        exit_code = max(exit_code, EXIT_FAIL)
 
     if bench:
         click.echo("==== overall timings ====")
@@ -846,22 +974,30 @@ def _paths_fix(
         timing_summary = result.timing_summary()
         for step in timing_summary:
             click.echo(f"=== {step} ===")
-            click.echo(formatter.cli_table(timing_summary[step].items()))
+            click.echo(
+                formatter.cli_table(timing_summary[step].items(), cols=3, col_width=20)
+            )
 
     if show_lint_violations:
         click.echo("==== lint for unfixable violations ====")
-        all_results = result.violation_dict(**num_violations_kwargs)
-        sorted_files = sorted(all_results.keys())
-        for file in sorted_files:
-            violations = all_results.get(file, [])
-            click.echo(formatter.format_filename(file, success=(not violations)))
-            for violation in violations:
+        for record in result.as_records():
+            # Non fixable linting errors _have_ a `fixes` value, but it's an empty list.
+            non_fixable = [
+                v for v in record["violations"] if v.get("fixes", None) == []
+            ]
+            click.echo(
+                formatter.format_filename(record["filepath"], success=(not non_fixable))
+            )
+            for violation in non_fixable:
                 click.echo(formatter.format_violation(violation))
+
+    if persist_timing:
+        result.persist_timing_records(persist_timing)
 
     sys.exit(exit_code)
 
 
-@cli.command(cls=DeprecatedOptionsCommand)
+@cli.command()
 @common_options
 @core_options
 @lint_options
@@ -870,8 +1006,29 @@ def _paths_fix(
     "--force",
     is_flag=True,
     help=(
-        "skip the confirmation prompt and go straight to applying "
-        "fixes. **Use this with caution.**"
+        "[DEPRECATED - From 3.0 onward this is the default behaviour] "
+        "Apply fixes will also be applied file by file, during the "
+        "linting process, rather than waiting until all files are "
+        "linted before fixing."
+    ),
+)
+@click.option(
+    "--check",
+    is_flag=True,
+    help=(
+        "Analyse all files and ask for confirmation before applying "
+        "any fixes. Fixes will be applied all together at the end of "
+        "the operation."
+    ),
+)
+@click.option(
+    "-q",
+    "--quiet",
+    is_flag=True,
+    help=(
+        "Reduces the amount of output to stdout to a minimal level. "
+        "This is effectively the opposite of -v. NOTE: It will only "
+        "take effect if -f/--force is also set."
     ),
 )
 @click.option(
@@ -902,14 +1059,18 @@ def _paths_fix(
 def fix(
     force: bool,
     paths: Tuple[str],
+    check: bool = False,
     bench: bool = False,
+    quiet: bool = False,
     fixed_suffix: str = "",
     logger: Optional[logging.Logger] = None,
     processes: Optional[int] = None,
     disable_progress_bar: Optional[bool] = False,
+    persist_timing: Optional[str] = None,
     extra_config_path: Optional[str] = None,
     ignore_local_config: bool = False,
     show_lint_violations: bool = False,
+    stdin_filename: Optional[str] = None,
     **kwargs,
 ) -> None:
     """Fix SQL files.
@@ -921,6 +1082,13 @@ def fix(
     """
     # some quick checks
     fixing_stdin = ("-",) == paths
+    if quiet:
+        if kwargs["verbose"]:
+            click.echo(
+                "ERROR: The --quiet flag can only be used if --verbose is not set.",
+            )
+            sys.exit(EXIT_ERROR)
+        kwargs["verbose"] = -1
 
     config = get_config(
         extra_config_path, ignore_local_config, require_dialect=False, **kwargs
@@ -929,7 +1097,9 @@ def fix(
     output_stream = make_output_stream(
         config, None, os.devnull if fixing_stdin else None
     )
-    lnt, formatter = get_linter_and_formatter(config, output_stream)
+    lnt, formatter = get_linter_and_formatter(
+        config, output_stream, show_lint_violations
+    )
 
     verbose = config.get("verbose")
     progress_bar_configuration.disable_progress_bar = disable_progress_bar
@@ -944,24 +1114,38 @@ def fix(
         stderr_output=fixing_stdin,
     )
 
-    # handle stdin case. should output formatted sql to stdout and nothing else.
-    if fixing_stdin:
-        _stdin_fix(lnt, formatter, fix_even_unparsable)
-    else:
-        _paths_fix(
-            lnt,
-            formatter,
-            paths,
-            processes,
-            fix_even_unparsable,
-            force,
-            fixed_suffix,
-            bench,
-            show_lint_violations,
+    if force:
+        click.echo(
+            formatter.colorize(
+                "The -f/--force option is deprecated as it is now the "
+                "default behaviour.",
+                Color.red,
+            ),
+            err=True,
         )
 
+    with PathAndUserErrorHandler(formatter):
+        # handle stdin case. should output formatted sql to stdout and nothing else.
+        if fixing_stdin:
+            if stdin_filename:
+                lnt.config = lnt.config.make_child_from_path(stdin_filename)
+            _stdin_fix(lnt, formatter, fix_even_unparsable)
+        else:
+            _paths_fix(
+                lnt,
+                formatter,
+                paths,
+                processes,
+                fix_even_unparsable,
+                fixed_suffix,
+                bench,
+                show_lint_violations,
+                check=check,
+                persist_timing=persist_timing,
+            )
 
-@cli.command(name="format", cls=DeprecatedOptionsCommand)
+
+@cli.command(name="format")
 @common_options
 @core_options
 @lint_options
@@ -979,8 +1163,10 @@ def cli_format(
     logger: Optional[logging.Logger] = None,
     processes: Optional[int] = None,
     disable_progress_bar: Optional[bool] = False,
+    persist_timing: Optional[str] = None,
     extra_config_path: Optional[str] = None,
     ignore_local_config: bool = False,
+    stdin_filename: Optional[str] = None,
     **kwargs,
 ) -> None:
     """Autoformat SQL files.
@@ -1040,22 +1226,24 @@ def cli_format(
         stderr_output=fixing_stdin,
     )
 
-    # handle stdin case. should output formatted sql to stdout and nothing else.
-    if fixing_stdin:
-        _stdin_fix(lnt, formatter, fix_even_unparsable=False)
-    else:
-        _paths_fix(
-            lnt,
-            formatter,
-            paths,
-            processes,
-            fix_even_unparsable=False,
-            force=True,  # Always force in format mode.
-            fixed_suffix=fixed_suffix,
-            bench=bench,
-            show_lint_violations=False,
-            warn_force=False,  # don't warn about being in force mode.
-        )
+    with PathAndUserErrorHandler(formatter):
+        # handle stdin case. should output formatted sql to stdout and nothing else.
+        if fixing_stdin:
+            if stdin_filename:
+                lnt.config = lnt.config.make_child_from_path(stdin_filename)
+            _stdin_fix(lnt, formatter, fix_even_unparsable=False)
+        else:
+            _paths_fix(
+                lnt,
+                formatter,
+                paths,
+                processes,
+                fix_even_unparsable=False,
+                fixed_suffix=fixed_suffix,
+                bench=bench,
+                show_lint_violations=False,
+                persist_timing=persist_timing,
+            )
 
 
 def quoted_presenter(dumper, data):
@@ -1070,9 +1258,6 @@ def quoted_presenter(dumper, data):
 @common_options
 @core_options
 @click.argument("path", nargs=1, type=click.Path(allow_dash=True))
-@click.option(
-    "--recurse", default=0, help="The depth to recursively parse to (0 for unlimited)"
-)
 @click.option(
     "-c",
     "--code-only",
@@ -1097,6 +1282,7 @@ def quoted_presenter(dumper, data):
             FormatType.human.value,
             FormatType.json.value,
             FormatType.yaml.value,
+            FormatType.none.value,
         ],
         case_sensitive=False,
     ),
@@ -1111,7 +1297,12 @@ def quoted_presenter(dumper, data):
     ),
 )
 @click.option(
-    "--profiler", is_flag=True, help="Set this flag to engage the python profiler."
+    "--parse-statistics",
+    is_flag=True,
+    help=(
+        "Set this flag to enabled detailed debugging readout "
+        "on the use of terminators in the parser."
+    ),
 )
 @click.option(
     "--nofail",
@@ -1127,12 +1318,13 @@ def parse(
     include_meta: bool,
     format: str,
     write_output: Optional[str],
-    profiler: bool,
     bench: bool,
     nofail: bool,
     logger: Optional[logging.Logger] = None,
     extra_config_path: Optional[str] = None,
     ignore_local_config: bool = False,
+    parse_statistics: bool = False,
+    stdin_filename: Optional[str] = None,
     **kwargs,
 ) -> None:
     """Parse SQL files and just spit out the result.
@@ -1151,7 +1343,6 @@ def parse(
     output_stream = make_output_stream(c, format, write_output)
     lnt, formatter = get_linter_and_formatter(c, output_stream)
     verbose = c.get("verbose")
-    recurse = c.get("recurse")
 
     progress_bar_configuration.disable_progress_bar = True
 
@@ -1165,29 +1356,20 @@ def parse(
         stderr_output=non_human_output,
     )
 
-    # TODO: do this better
-
-    if profiler:
-        # Set up the profiler if required
-        try:
-            import cProfile
-        except ImportError:  # pragma: no cover
-            click.echo("The cProfiler is not available on your platform.")
-            sys.exit(EXIT_ERROR)
-        pr = cProfile.Profile()
-        pr.enable()
-
     t0 = time.monotonic()
 
     # handle stdin if specified via lone '-'
     with PathAndUserErrorHandler(formatter):
         if "-" == path:
+            file_config = lnt.config
+            if stdin_filename:
+                file_config = file_config.make_child_from_path(stdin_filename)
             parsed_strings = [
                 lnt.parse_string(
                     sys.stdin.read(),
                     "stdin",
-                    recurse=recurse,
-                    config=lnt.config,
+                    config=file_config,
+                    parse_statistics=parse_statistics,
                 ),
             ]
         else:
@@ -1195,7 +1377,7 @@ def parse(
             parsed_strings = list(
                 lnt.parse_path(
                     path=path,
-                    recurse=recurse,
+                    parse_statistics=parse_statistics,
                 )
             )
 
@@ -1208,36 +1390,41 @@ def parse(
             output_stream, bench, code_only, total_time, verbose, parsed_strings
         )
     else:
-        parsed_strings_dict = [
-            dict(
-                filepath=linted_result.fname,
-                segments=linted_result.tree.as_record(
+        parsed_strings_dict = []
+        for parsed_string in parsed_strings:
+            # TODO: Multiple variants aren't yet supported here in the non-human
+            # output of the parse command.
+            root_variant = parsed_string.root_variant()
+            # Updating violation count ensures the correct return code below.
+            violations_count += len(parsed_string.violations)
+            if root_variant:
+                assert root_variant.tree
+                segments = root_variant.tree.as_record(
                     code_only=code_only, show_raw=True, include_meta=include_meta
                 )
-                if linted_result.tree
-                else None,
+            else:
+                # Parsing failed - return null for segments.
+                segments = None
+            parsed_strings_dict.append(
+                {"filepath": parsed_string.fname, "segments": segments}
             )
-            for linted_result in parsed_strings
-        ]
 
         if format == FormatType.yaml.value:
             # For yaml dumping always dump double quoted strings if they contain
             # tabs or newlines.
             yaml.add_representer(str, quoted_presenter)
-            file_output = yaml.dump(parsed_strings_dict, sort_keys=False)
+            file_output = yaml.dump(
+                parsed_strings_dict,
+                sort_keys=False,
+                allow_unicode=True,
+            )
         elif format == FormatType.json.value:
             file_output = json.dumps(parsed_strings_dict)
+        elif format == FormatType.none.value:
+            file_output = ""
 
         # Dump the output to stdout or to file as appropriate.
         dump_file_payload(write_output, file_output)
-    if profiler:
-        pr.disable()
-        profiler_buffer = StringIO()
-        ps = pstats.Stats(pr, stream=profiler_buffer).sort_stats("cumulative")
-        ps.print_stats()
-        click.echo("==== profiler stats ====")
-        # Only print the first 50 lines of it
-        click.echo("\n".join(profiler_buffer.getvalue().split("\n")[:50]))
 
     if violations_count > 0 and not nofail:
         sys.exit(EXIT_FAIL)  # pragma: no cover
@@ -1294,17 +1481,35 @@ def render(
             raw_sql, file_config, _ = lnt.load_raw_file_and_config(path, lnt.config)
             fname = path
 
-    # Get file specific config
-    file_config.process_raw_file_for_config(raw_sql)
-    rendered = lnt.render_string(raw_sql, fname, file_config, "utf8")
+        # Get file specific config
+        file_config.process_raw_file_for_config(raw_sql, fname)
+        rendered = lnt.render_string(raw_sql, fname, file_config, "utf8")
 
-    if rendered.templater_violations:
-        for v in rendered.templater_violations:
-            click.echo(formatter.format_violation(v))
-        sys.exit(EXIT_FAIL)
-    else:
-        click.echo(rendered.templated_file.templated_str)
-        sys.exit(EXIT_SUCCESS)
+        if rendered.templater_violations:
+            for v in rendered.templater_violations:
+                click.echo(formatter.format_violation(v))
+            sys.exit(EXIT_FAIL)
+        else:
+            _num_variants = len(rendered.templated_variants)
+            if _num_variants > 1:
+                click.echo(
+                    formatter.colorize(
+                        f"SQLFluff rendered {_num_variants} variants of this file",
+                        Color.blue,
+                    )
+                )
+                for idx, variant in enumerate(rendered.templated_variants):
+                    click.echo(
+                        formatter.colorize(
+                            f"Variant {idx + 1}:",
+                            Color.blue,
+                        )
+                    )
+                    click.echo(variant)
+            else:
+                # No preamble if there's only one.
+                click.echo(rendered.templated_variants[0])
+            sys.exit(EXIT_SUCCESS)
 
 
 # This "__main__" handler allows invoking SQLFluff using "python -m", which

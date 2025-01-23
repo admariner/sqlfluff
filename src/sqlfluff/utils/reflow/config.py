@@ -1,10 +1,9 @@
 """Methods to set up appropriate reflow config from file."""
 
-
 # Until we have a proper structure this will work.
 # TODO: Migrate this to the config file.
 from dataclasses import dataclass
-from typing import AbstractSet, Dict, FrozenSet, Set, Optional
+from typing import AbstractSet, Any, Dict, FrozenSet, Optional, Set
 
 from sqlfluff.core.config import FluffConfig
 from sqlfluff.utils.reflow.depthmap import DepthInfo
@@ -21,6 +20,7 @@ class BlockConfig:
     spacing_after: str = "single"
     spacing_within: Optional[str] = None
     line_position: Optional[str] = None
+    keyword_line_position: Optional[str] = None
 
     def incorporate(
         self,
@@ -29,7 +29,8 @@ class BlockConfig:
         within: Optional[str] = None,
         line_position: Optional[str] = None,
         config: Optional[ConfigElementType] = None,
-    ):
+        keyword_line_position: Optional[str] = None,
+    ) -> None:
         """Mutate the config based on additional information."""
         config = config or {}
         self.spacing_before = (
@@ -43,6 +44,11 @@ class BlockConfig:
         )
         self.line_position = (
             line_position or config.get("line_position", None) or self.line_position
+        )
+        self.keyword_line_position = (
+            keyword_line_position
+            or config.get("keyword_line_position", None)
+            or self.keyword_line_position
         )
 
 
@@ -66,9 +72,11 @@ class ReflowConfig:
     hanging_indents: bool = False
     skip_indentation_in: FrozenSet[str] = frozenset()
     allow_implicit_indents: bool = False
+    trailing_comments: str = "before"
+    ignore_comment_lines: bool = False
 
     @classmethod
-    def from_dict(cls, config_dict: ConfigDictType, **kwargs):
+    def from_dict(cls, config_dict: ConfigDictType, **kwargs: Any) -> "ReflowConfig":
         """Construct a ReflowConfig from a dict."""
         config_types = set(config_dict.keys())
         # Enrich any of the "align" keys with what they're aligning with.
@@ -86,7 +94,7 @@ class ReflowConfig:
         return cls(_config_dict=config_dict, config_types=config_types, **kwargs)
 
     @classmethod
-    def from_fluff_config(cls, config: FluffConfig):
+    def from_fluff_config(cls, config: FluffConfig) -> "ReflowConfig":
         """Constructs a ReflowConfig from a FluffConfig."""
         return cls.from_dict(
             config.get_section(["layout", "type"]),
@@ -100,6 +108,8 @@ class ReflowConfig:
             allow_implicit_indents=config.get(
                 "allow_implicit_indents", ["indentation"]
             ),
+            trailing_comments=config.get("trailing_comments", ["indentation"]),
+            ignore_comment_lines=config.get("ignore_comment_lines", ["indentation"]),
         )
 
     def get_block_config(

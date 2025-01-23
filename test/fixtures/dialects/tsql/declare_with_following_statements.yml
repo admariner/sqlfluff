@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: 965bf0479aba3f070f232c24f5cd5972ded3a634a9f5752eead4702eb1548291
+_hash: cd0403da69096df18ca1ae2d66b26cf180b6d555dbb7e2cca8f9eec07064a3d2
 file:
   batch:
     create_procedure_statement:
@@ -38,9 +38,10 @@ file:
                   function:
                     function_name:
                       function_name_identifier: GETDATE
-                    bracketed:
-                      start_bracket: (
-                      end_bracket: )
+                    function_contents:
+                      bracketed:
+                        start_bracket: (
+                        end_bracket: )
                 statement_terminator: ;
           - statement:
               declare_segment:
@@ -54,9 +55,10 @@ file:
                   function:
                     function_name:
                       function_name_identifier: GETDATE
-                    bracketed:
-                      start_bracket: (
-                      end_bracket: )
+                    function_contents:
+                      bracketed:
+                        start_bracket: (
+                        end_bracket: )
               - comma: ','
               - parameter: '@DateEnd'
               - data_type:
@@ -67,9 +69,10 @@ file:
                   function:
                     function_name:
                       function_name_identifier: GETDATE
-                    bracketed:
-                      start_bracket: (
-                      end_bracket: )
+                    function_contents:
+                      bracketed:
+                        start_bracket: (
+                        end_bracket: )
           - statement:
               declare_segment:
                 keyword: DECLARE
@@ -139,14 +142,15 @@ file:
                   - function:
                       function_name:
                         function_name_identifier: OBJECT_ID
-                      bracketed:
-                        start_bracket: (
-                        expression:
-                          quoted_literal: "'tempdb..#UP'"
-                        end_bracket: )
+                      function_contents:
+                        bracketed:
+                          start_bracket: (
+                          expression:
+                            quoted_literal: "'tempdb..#UP'"
+                          end_bracket: )
                   - keyword: IS
                   - keyword: NOT
-                  - keyword: 'NULL'
+                  - null_literal: 'NULL'
                 statement:
                   drop_table_statement:
                   - keyword: DROP

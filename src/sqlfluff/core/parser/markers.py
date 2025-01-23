@@ -4,9 +4,9 @@ This class is a construct to keep track of positions within a file.
 """
 
 from dataclasses import dataclass
-from typing import Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
-from sqlfluff.core.slice_helpers import zero_slice
+from sqlfluff.core.helpers.slice import zero_slice
 
 if TYPE_CHECKING:
     from sqlfluff.core.templaters import TemplatedFile  # pragma: no cover
@@ -36,7 +36,7 @@ class PositionMarker:
     working_line_no: int = -1
     working_line_pos: int = -1
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # If the working position has not been explicitly set
         # then infer it from the position in the templated file.
         # This is accurate up until the point that any fixes have
@@ -47,20 +47,25 @@ class PositionMarker:
             object.__setattr__(self, "working_line_no", line_no)
             object.__setattr__(self, "working_line_pos", line_pos)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.to_source_string()
 
-    def __gt__(self, other):
-        return self.working_loc > other.working_loc  # pragma: no cover TODO?
+    def __gt__(self, other: "PositionMarker") -> bool:
+        return self.working_loc > other.working_loc
 
-    def __lt__(self, other):
-        return self.working_loc < other.working_loc  # pragma: no cover TODO?
+    def __lt__(self, other: "PositionMarker") -> bool:
+        return self.working_loc < other.working_loc
 
-    def __ge__(self, other):
-        return self.working_loc >= other.working_loc  # pragma: no cover TODO?
+    def __ge__(self, other: "PositionMarker") -> bool:
+        return self.working_loc >= other.working_loc
 
-    def __le__(self, other):
-        return self.working_loc <= other.working_loc  # pragma: no cover TODO?
+    def __le__(self, other: "PositionMarker") -> bool:
+        return self.working_loc <= other.working_loc
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, PositionMarker):
+            return False  # pragma: no cover
+        return self.working_loc == other.working_loc
 
     @property
     def working_loc(self) -> Tuple[int, int]:
@@ -81,8 +86,8 @@ class PositionMarker:
         source_point: int,
         templated_point: int,
         templated_file: "TemplatedFile",
-        **kwargs,
-    ):
+        **kwargs: int,  # kwargs can only contain working_line positions
+    ) -> "PositionMarker":
         """Convenience method for creating point markers."""
         return cls(
             zero_slice(source_point),
@@ -96,7 +101,7 @@ class PositionMarker:
         cls,
         start_point_marker: "PositionMarker",
         end_point_marker: "PositionMarker",
-    ):
+    ) -> "PositionMarker":
         """Construct a position marker from the section between two points."""
         return cls(
             slice(
@@ -118,17 +123,19 @@ class PositionMarker:
         )
 
     @classmethod
-    def from_child_markers(cls, *markers):
+    def from_child_markers(
+        cls, *markers: Optional["PositionMarker"]
+    ) -> "PositionMarker":
         """Create a parent marker from it's children."""
         source_slice = slice(
-            min(m.source_slice.start for m in markers),
-            max(m.source_slice.stop for m in markers),
+            min(m.source_slice.start for m in markers if m),
+            max(m.source_slice.stop for m in markers if m),
         )
         templated_slice = slice(
-            min(m.templated_slice.start for m in markers),
-            max(m.templated_slice.stop for m in markers),
+            min(m.templated_slice.start for m in markers if m),
+            max(m.templated_slice.stop for m in markers if m),
         )
-        templated_files = {m.templated_file for m in markers}
+        templated_files = {m.templated_file for m in markers if m}
         if len(templated_files) != 1:  # pragma: no cover
             raise ValueError("Attempted to make a parent marker from multiple files.")
         templated_file = templated_files.pop()
@@ -181,9 +188,10 @@ class PositionMarker:
         )
 
     @staticmethod
-    def slice_is_point(test_slice):
+    def slice_is_point(test_slice: slice) -> bool:
         """Is this slice a point."""
-        return test_slice.start == test_slice.stop
+        is_point: bool = test_slice.start == test_slice.stop
+        return is_point
 
     def is_point(self) -> bool:
         """A marker is a point if it has zero length in templated and source file."""
@@ -229,7 +237,7 @@ class PositionMarker:
 
         This value is used for:
         - Ignoring linting errors in templated sections.
-        - Whether `iter_patches` can return without recursing.
+        - Whether `_iter_templated_patches` can return without recursing.
         - Whether certain rules (such as JJ01) are triggered.
         """
         return self.templated_file.is_source_slice_literal(self.source_slice)
@@ -237,3 +245,7 @@ class PositionMarker:
     def source_str(self) -> str:
         """Returns the string in the source at this position."""
         return self.templated_file.source_str[self.source_slice]
+
+    def to_source_dict(self) -> Dict[str, int]:
+        """Serialise the source position."""
+        return self.templated_file.source_position_dict_from_slice(self.source_slice)

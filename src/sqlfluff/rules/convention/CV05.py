@@ -1,12 +1,12 @@
 """Implementation of Rule CV05."""
+
 from typing import List, Optional, Union
 
 from sqlfluff.core.parser import KeywordSegment, WhitespaceSegment
-from sqlfluff.core.rules import LintResult, RuleContext, BaseRule
+from sqlfluff.core.rules import BaseRule, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
-from sqlfluff.utils.functional import sp, Segments
+from sqlfluff.utils.functional import Segments, sp
 from sqlfluff.utils.reflow import ReflowSequence
-
 
 CorrectionListType = List[Union[WhitespaceSegment, KeywordSegment]]
 
@@ -52,13 +52,23 @@ class Rule_CV05(BaseRule):
 
         # Allow assignments in SET clauses
         if len(context.parent_stack) >= 2 and context.parent_stack[-2].is_type(
-            "set_clause_list", "execute_script_statement"
+            "set_clause_list", "execute_script_statement", "options_segment"
         ):
             return None
 
         # Allow assignments in EXEC clauses, or any other explicit assignments
         if context.parent_stack and context.parent_stack[-1].is_type(
             "set_clause_list", "execute_script_statement", "assignment_operator"
+        ):
+            return None
+
+        # If the operator is in an EXCLUDE constraint (PostgreSQL feature), the SQL
+        # could look like: EXCLUDE (field WITH =).  In that case, we can exit early
+        # to avoid an assertion failure due to no segment following the operator.
+        # Note that if the EXCLUDE is based on an expression, we will still be
+        # checking that expression because it will be under a different child segment.
+        if context.parent_stack and context.parent_stack[-1].is_type(
+            "exclusion_constraint_element"
         ):
             return None
 

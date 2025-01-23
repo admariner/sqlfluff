@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: 2669ec22912c0564cc026fb2472887b407e941b4790df8a2407f45fc0611f10a
+_hash: f8a43f0a13569e849958bf2bced90a8f0fdfddebf945c36152fb90a797306eaf
 file:
 - statement:
     select_statement:
@@ -29,15 +29,16 @@ file:
           function:
             function_name:
               function_name_identifier: SUM
-            bracketed:
-              start_bracket: (
-              expression:
-              - column_reference:
-                  naked_identifier: scum
-              - binary_operator: +
-              - column_reference:
-                  naked_identifier: villainy
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                - column_reference:
+                    naked_identifier: scum
+                - binary_operator: +
+                - column_reference:
+                    naked_identifier: villainy
+                end_bracket: )
           alias_expression:
             keyword: as
             naked_identifier: total_scum_and_villainy
@@ -61,35 +62,37 @@ file:
           wildcard_expression:
             wildcard_identifier:
               star: '*'
-          keyword: EXCLUDE
-          bracketed:
-          - start_bracket: (
-          - column_reference:
-              naked_identifier: cantinas
-          - comma: ','
-          - column_reference:
-              naked_identifier: booths
-          - comma: ','
-          - column_reference:
-              naked_identifier: scum
-          - comma: ','
-          - column_reference:
-              naked_identifier: villainy
-          - end_bracket: )
+            wildcard_exclude:
+              keyword: EXCLUDE
+              bracketed:
+              - start_bracket: (
+              - column_reference:
+                  naked_identifier: cantinas
+              - comma: ','
+              - column_reference:
+                  naked_identifier: booths
+              - comma: ','
+              - column_reference:
+                  naked_identifier: scum
+              - comma: ','
+              - column_reference:
+                  naked_identifier: villainy
+              - end_bracket: )
       - comma: ','
       - select_clause_element:
           function:
             function_name:
               function_name_identifier: SUM
-            bracketed:
-              start_bracket: (
-              expression:
-              - column_reference:
-                  naked_identifier: scum
-              - binary_operator: +
-              - column_reference:
-                  naked_identifier: villainy
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                - column_reference:
+                    naked_identifier: scum
+                - binary_operator: +
+                - column_reference:
+                    naked_identifier: villainy
+                end_bracket: )
           alias_expression:
             keyword: as
             naked_identifier: total_scum_and_villainy
@@ -117,12 +120,13 @@ file:
           function:
             function_name:
               function_name_identifier: sum
-            bracketed:
-              start_bracket: (
-              expression:
-                column_reference:
-                  naked_identifier: civility
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  column_reference:
+                    naked_identifier: civility
+                end_bracket: )
           alias_expression:
             keyword: as
             naked_identifier: total_civility

@@ -14,40 +14,71 @@ https://github.com/apache/spark/blob/master/sql/catalyst/src/main/antlr4/org/apa
 from sqlfluff.core.dialects import load_raw_dialect
 from sqlfluff.core.parser import (
     AnyNumberOf,
+    AnySetOf,
+    Anything,
     BaseSegment,
     Bracketed,
+    BracketedSegment,
+    CodeSegment,
     CommentSegment,
+    ComparisonOperatorSegment,
     Conditional,
     Dedent,
     Delimited,
+    IdentifierSegment,
+    ImplicitIndent,
     Indent,
-    TypedParser,
-    OneOf,
-    OptionallyBracketed,
-    Ref,
-    RegexLexer,
-    Sequence,
-    StringParser,
-    SymbolSegment,
-    Anything,
-    StartsWith,
-    RegexParser,
+    KeywordSegment,
+    LiteralSegment,
     Matchable,
     MultiStringParser,
+    OneOf,
+    OptionallyBracketed,
+    ParseMode,
+    Ref,
+    RegexLexer,
+    RegexParser,
+    Sequence,
     StringLexer,
+    StringParser,
+    SymbolSegment,
+    TypedParser,
+    WordSegment,
 )
-from sqlfluff.core.parser.segments.raw import CodeSegment, KeywordSegment
+from sqlfluff.dialects import dialect_ansi as ansi
+from sqlfluff.dialects import dialect_hive as hive
 from sqlfluff.dialects.dialect_sparksql_keywords import (
     RESERVED_KEYWORDS,
     UNRESERVED_KEYWORDS,
 )
 
-from sqlfluff.dialects import dialect_ansi as ansi
-from sqlfluff.dialects import dialect_hive as hive
-
 ansi_dialect = load_raw_dialect("ansi")
 hive_dialect = load_raw_dialect("hive")
-sparksql_dialect = ansi_dialect.copy_as("sparksql")
+sparksql_dialect = ansi_dialect.copy_as(
+    "sparksql",
+    formatted_name="Apache Spark SQL",
+    docstring="""**Default Casing**: SparkSQL is case insensitive with
+both quoted and unquoted identifiers (_"delimited"_ identifiers in
+Spark terminology). See the `Spark Identifiers`_ docs.
+
+**Quotes**: String Literals: ``''`` or ``""``, Identifiers: |back_quotes|.
+
+The dialect for Apache `Spark SQL`_. This includes relevant
+syntax from :ref:`hive_dialect_ref` for commands that permit Hive Format.
+Spark SQL extensions provided by the `Delta Lake`_ project are also implemented
+in this dialect.
+
+This implementation focuses on the `Ansi Compliant Mode`_ introduced in
+Spark3, instead of being Hive Compliant. The introduction of ANSI Compliance
+provides better data quality and easier migration from traditional DBMS.
+
+Versions of Spark prior to 3.x will only support the Hive dialect.
+
+.. _`Spark SQL`: https://spark.apache.org/docs/latest/sql-ref.html
+.. _`Delta Lake`: https://docs.delta.io/latest/quick-start.html#set-up-apache-spark-with-delta-lake
+.. _`Ansi Compliant Mode`: https://spark.apache.org/docs/latest/sql-ref-ansi-compliance.html
+.. _`Spark Identifiers`: https://spark.apache.org/docs/latest/sql-ref-identifier.html""",  # noqa: E501
+)
 
 sparksql_dialect.patch_lexer_matchers(
     [
@@ -56,7 +87,7 @@ sparksql_dialect.patch_lexer_matchers(
             "inline_comment",
             r"(--)[^\n]*",
             CommentSegment,
-            segment_kwargs={"trim_start": "--", "type": "inline_comment"},
+            segment_kwargs={"trim_start": "--"},
         ),
         # == and <=> are valid equal operations
         # <=> is a non-null equals in Spark SQL
@@ -71,7 +102,10 @@ sparksql_dialect.patch_lexer_matchers(
             "back_quote",
             r"`([^`]|``)*`",
             CodeSegment,
-            segment_kwargs={"type": "back_quote"},
+            segment_kwargs={
+                "quoted_value": (r"`((?:[^`]|``)*)`", 1),
+                "escape_replacements": [(r"``", "`")],
+            },
         ),
         # Numeric literal matches integers, decimals, and exponential formats.
         # https://spark.apache.org/docs/latest/sql-ref-literals.html#numeric-literal
@@ -116,7 +150,6 @@ sparksql_dialect.patch_lexer_matchers(
                 r"((?<=\.)|(?=\b))"
             ),
             CodeSegment,
-            segment_kwargs={"type": "numeric_literal"},
         ),
     ]
 )
@@ -124,16 +157,24 @@ sparksql_dialect.patch_lexer_matchers(
 sparksql_dialect.insert_lexer_matchers(
     [
         RegexLexer(
+            "raw_single_quote",
+            r"[rR]'([^'\\]|\\.)*'",
+            CodeSegment,
+        ),
+        RegexLexer(
+            "raw_double_quote",
+            r'[rR]"([^"\\]|\\.)*"',
+            CodeSegment,
+        ),
+        RegexLexer(
             "bytes_single_quote",
             r"X'([^'\\]|\\.)*'",
             CodeSegment,
-            segment_kwargs={"type": "bytes_single_quote"},
         ),
         RegexLexer(
             "bytes_double_quote",
             r'X"([^"\\]|\\.)*"',
             CodeSegment,
-            segment_kwargs={"type": "bytes_double_quote"},
         ),
     ],
     before="single_quote",
@@ -145,10 +186,23 @@ sparksql_dialect.insert_lexer_matchers(
             "at_sign_literal",
             r"@\w*",
             CodeSegment,
-            segment_kwargs={"type": "at_sign_literal"},
         ),
     ],
-    before="code",
+    before="word",
+)
+sparksql_dialect.insert_lexer_matchers(
+    [
+        RegexLexer(
+            "file_literal",
+            (
+                r"[a-zA-Z0-9]+:([a-zA-Z0-9\-_\.]*(\/|\\)){2,}"
+                r"((([a-zA-Z0-9\-_\.]*(:|\?|=|&)[a-zA-Z0-9\-_\.]*)+)"
+                r"|([a-zA-Z0-9\-_\.]*\.[a-z]+))"
+            ),
+            CodeSegment,
+        ),
+    ],
+    before="newline",
 )
 
 # Set the bare functions
@@ -158,6 +212,19 @@ sparksql_dialect.sets("bare_functions").update(
         "CURRENT_DATE",
         "CURRENT_TIMESTAMP",
         "CURRENT_USER",
+    ]
+)
+
+# Set the date part functions
+sparksql_dialect.sets("date_part_function_name").clear()
+sparksql_dialect.sets("date_part_function_name").update(
+    [
+        "DATE_ADD",
+        "DATE_DIFF",
+        "DATEADD",
+        "DATEDIFF",
+        "TIMESTAMPADD",
+        "TIMESTAMPDIFF",
     ]
 )
 
@@ -180,6 +247,7 @@ sparksql_dialect.sets("datetime_units").update(
         "DAY",
         "DAYS",
         "DD",
+        "DAYOFYEAR",
         "HOUR",
         "HOURS",
         "MINUTE",
@@ -198,7 +266,7 @@ sparksql_dialect.sets("unreserved_keywords").update(UNRESERVED_KEYWORDS)
 sparksql_dialect.sets("reserved_keywords").update(RESERVED_KEYWORDS)
 
 # Set Angle Bracket Pairs
-sparksql_dialect.sets("angle_bracket_pairs").update(
+sparksql_dialect.bracket_sets("angle_bracket_pairs").update(
     [
         ("angle", "StartAngleBracketSegment", "EndAngleBracketSegment", False),
     ]
@@ -206,6 +274,12 @@ sparksql_dialect.sets("angle_bracket_pairs").update(
 
 # Real Segments
 sparksql_dialect.replace(
+    DateTimeLiteralGrammar=Sequence(
+        OneOf(
+            "DATE", "TIME", "TIMESTAMP", "INTERVAL", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ"
+        ),
+        TypedParser("single_quote", LiteralSegment, type="date_constructor_literal"),
+    ),
     ComparisonOperatorGrammar=OneOf(
         Ref("EqualsSegment"),
         Ref("EqualsSegment_a"),
@@ -216,6 +290,18 @@ sparksql_dialect.replace(
         Ref("LessThanOrEqualToSegment"),
         Ref("NotEqualToSegment"),
         Ref("LikeOperatorSegment"),
+        Sequence("IS", "DISTINCT", "FROM"),
+        Sequence("IS", "NOT", "DISTINCT", "FROM"),
+    ),
+    SelectClauseTerminatorGrammar=ansi_dialect.get_grammar(
+        "SelectClauseTerminatorGrammar"
+    ).copy(
+        insert=[
+            Sequence("CLUSTER", "BY"),
+            Sequence("DISTRIBUTE", "BY"),
+            Sequence("SORT", "BY"),
+            Ref.keyword("QUALIFY"),
+        ]
     ),
     FromClauseTerminatorGrammar=OneOf(
         "WHERE",
@@ -237,17 +323,33 @@ sparksql_dialect.replace(
         OneOf("TEMP", "TEMPORARY"),
     ),
     QuotedLiteralSegment=OneOf(
-        TypedParser("single_quote", ansi.LiteralSegment, type="quoted_literal"),
-        TypedParser("double_quote", ansi.LiteralSegment, type="quoted_literal"),
+        TypedParser("single_quote", LiteralSegment, type="quoted_literal"),
+        TypedParser("double_quote", LiteralSegment, type="quoted_literal"),
     ),
     LiteralGrammar=ansi_dialect.get_grammar("LiteralGrammar").copy(
         insert=[
+            Ref("RawQuotedLiteralSegment"),
             Ref("BytesQuotedLiteralSegment"),
         ]
     ),
     NaturalJoinKeywordsGrammar=Sequence(
         "NATURAL",
         Ref("JoinTypeKeywords", optional=True),
+    ),
+    JoinLikeClauseGrammar=Sequence(
+        OneOf(
+            Ref("PivotClauseSegment"),
+            Ref("UnpivotClauseSegment"),
+            Ref("LateralViewClauseSegment"),
+        ),
+        Ref(
+            "AliasExpressionSegment",
+            exclude=OneOf(
+                Ref("FromClauseTerminatorGrammar"),
+                Ref("JoinLikeClauseGrammar"),
+            ),
+            optional=True,
+        ),
     ),
     LikeGrammar=OneOf(
         # https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-like.html
@@ -265,25 +367,9 @@ sparksql_dialect.replace(
         "RLIKE",
         "REGEXP",
     ),
-    SelectClauseSegmentGrammar=Sequence(
-        "SELECT",
-        OneOf(
-            Ref("TransformClauseSegment"),
-            Sequence(
-                Ref(
-                    "SelectClauseModifierSegment",
-                    optional=True,
-                ),
-                Indent,
-                Delimited(
-                    Ref("SelectClauseElementSegment"),
-                    allow_trailing=True,
-                ),
-            ),
-        ),
-        # NB: The Dedent for the indent above lives in the
-        # SelectStatementSegment so that it sits in the right
-        # place corresponding to the whitespace.
+    NotOperatorGrammar=OneOf(
+        StringParser("NOT", KeywordSegment, type="keyword"),
+        StringParser("!", CodeSegment, type="not_operator"),
     ),
     SingleIdentifierGrammar=OneOf(
         Ref("NakedIdentifierSegment"),
@@ -360,13 +446,11 @@ sparksql_dialect.replace(
         # Add arrow operators for lambdas (e.g. aggregate)
         Ref("RightArrowOperator"),
     ),
-    # Support for colon sign operator (Databricks SQL)
-    ObjectReferenceDelimiterGrammar=OneOf(
-        Ref("DotSegment"),
-        Sequence(Ref("DotSegment"), Ref("DotSegment")),
-        Ref("ColonSegment"),
+    AccessorGrammar=AnyNumberOf(
+        Ref("ArrayAccessorSegment"),
+        # Add in semi structured expressions
+        Ref("SemiStructuredAccessorSegment"),
     ),
-    # Support for colon sign operator (Databricks SQL)
     ObjectReferenceTerminatorGrammar=OneOf(
         "ON",
         "AS",
@@ -378,16 +462,35 @@ sparksql_dialect.replace(
         Ref("BinaryOperatorGrammar"),
         Ref("DelimiterGrammar"),
         Ref("JoinLikeClauseGrammar"),
-        ansi.BracketedSegment,
+        BracketedSegment,
     ),
+    FunctionContentsExpressionGrammar=OneOf(
+        Ref("ExpressionSegment"),
+        Ref("StarSegment"),
+    ),
+    NonWithNonSelectableGrammar=ansi_dialect.get_grammar(
+        "NonWithNonSelectableGrammar"
+    ).copy(insert=[Ref("InsertOverwriteDirectorySegment")]),
 )
 
 sparksql_dialect.add(
     BackQuotedIdentifierSegment=TypedParser(
         "back_quote",
-        ansi.IdentifierSegment,
+        IdentifierSegment,
         type="quoted_identifier",
         trim_chars=("`",),
+        # match ANSI's naked identifier casefold, sparksql is case-insensitive.
+        casefold=str.upper,
+    ),
+    NakedSemiStructuredElementSegment=RegexParser(
+        r"[A-Z0-9_]*",
+        CodeSegment,
+        type="semi_structured_element",
+    ),
+    QuotedSemiStructuredElementSegment=TypedParser(
+        "single_quote",
+        CodeSegment,
+        type="semi_structured_element",
     ),
     RightArrowOperator=StringParser("->", SymbolSegment, type="binary_operator"),
     BinaryfileKeywordSegment=StringParser(
@@ -409,8 +512,8 @@ sparksql_dialect.add(
         "<", SymbolSegment, type="start_angle_bracket"
     ),
     EndAngleBracketSegment=StringParser(">", SymbolSegment, type="end_angle_bracket"),
-    EqualsSegment_a=StringParser("==", ansi.ComparisonOperatorSegment),
-    EqualsSegment_b=StringParser("<=>", ansi.ComparisonOperatorSegment),
+    EqualsSegment_a=StringParser("==", ComparisonOperatorSegment),
+    EqualsSegment_b=StringParser("<=>", ComparisonOperatorSegment),
     FileKeywordSegment=MultiStringParser(
         ["FILE", "FILES"], KeywordSegment, type="file_keyword"
     ),
@@ -419,11 +522,6 @@ sparksql_dialect.add(
     ),
     NoscanKeywordSegment=StringParser("NOSCAN", KeywordSegment, type="keyword"),
     WhlKeywordSegment=StringParser("WHL", KeywordSegment, type="file_keyword"),
-    SQLConfPropertiesSegment=Sequence(
-        StringParser("-", SymbolSegment, type="dash"),
-        StringParser("v", SymbolSegment, type="sql_conf_option"),
-        allow_gaps=False,
-    ),
     # Add relevant Hive Grammar
     CommentGrammar=hive_dialect.get_grammar("CommentGrammar"),
     LocationGrammar=hive_dialect.get_grammar("LocationGrammar"),
@@ -438,7 +536,11 @@ sparksql_dialect.add(
         Ref("EqualsSegment", optional=True),
         OneOf(
             Ref("LiteralGrammar"),
-            Ref("SingleIdentifierGrammar"),
+            # when property value is Java Class Name
+            Delimited(
+                Ref("PropertiesNakedIdentifierSegment"),
+                delimiter=Ref("DotSegment"),
+            ),
         ),
     ),
     PropertyNameListGrammar=Delimited(Ref("PropertyNameSegment")),
@@ -481,6 +583,66 @@ sparksql_dialect.add(
         "TEXT",
         "BINARYFILE",
     ),
+    DescribeObjectGrammar=OneOf(
+        Sequence(
+            OneOf("DATABASE", "SCHEMA"),
+            Ref.keyword("EXTENDED", optional=True),
+            Ref("DatabaseReferenceSegment"),
+        ),
+        Sequence(
+            "FUNCTION",
+            Ref.keyword("EXTENDED", optional=True),
+            Ref("FunctionNameSegment"),
+        ),
+        Sequence(
+            Ref.keyword("TABLE", optional=True),
+            Ref.keyword("EXTENDED", optional=True),
+            Ref("TableReferenceSegment"),
+            Ref("PartitionSpecGrammar", optional=True),
+            # can be fully qualified column after table is listed
+            # [database.][table.][column]
+            Sequence(
+                Ref("SingleIdentifierGrammar"),
+                AnyNumberOf(
+                    Sequence(
+                        Ref("DotSegment"),
+                        Ref("SingleIdentifierGrammar"),
+                        allow_gaps=False,
+                    ),
+                    max_times=2,
+                    allow_gaps=False,
+                ),
+                optional=True,
+                allow_gaps=False,
+            ),
+        ),
+        Sequence(
+            Ref.keyword("QUERY", optional=True),
+            OneOf(
+                Sequence(
+                    "TABLE",
+                    Ref("TableReferenceSegment"),
+                ),
+                Sequence(
+                    "FROM",
+                    Ref("TableReferenceSegment"),
+                    "SELECT",
+                    Delimited(
+                        Ref("ColumnReferenceSegment"),
+                    ),
+                    Ref("WhereClauseSegment", optional=True),
+                    Ref("GroupByClauseSegment", optional=True),
+                    Ref("OrderByClauseSegment", optional=True),
+                    Ref("LimitClauseSegment", optional=True),
+                ),
+                Ref("StatementSegment"),
+            ),
+        ),
+        exclude=OneOf(
+            Ref.keyword("HISTORY"),
+            Ref.keyword("DETAIL"),
+        ),
+    ),
     FileFormatGrammar=OneOf(
         Ref("DataSourcesV2FileTypeGrammar"),
         "SEQUENCEFILE",
@@ -493,12 +655,6 @@ sparksql_dialect.add(
             "OUTPUTFORMAT",
             Ref("QuotedLiteralSegment"),
         ),
-    ),
-    DataSourceFormatGrammar=OneOf(
-        Ref("FileFormatGrammar"),
-        # NB: JDBC is part of DataSourceV2 but not included
-        # there since there are no significant syntax changes
-        "JDBC",
     ),
     TimestampAsOfGrammar=Sequence(
         "TIMESTAMP",
@@ -518,8 +674,8 @@ sparksql_dialect.add(
     ),
     # Adding Hint related segments so they are not treated as generic comments
     # https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-hints.html
-    StartHintSegment=StringParser("/*+", KeywordSegment, type="start_hint"),
-    EndHintSegment=StringParser("*/", KeywordSegment, type="end_hint"),
+    StartHintSegment=StringParser("/*+", SymbolSegment, type="start_hint"),
+    EndHintSegment=StringParser("*/", SymbolSegment, type="end_hint"),
     PartitionSpecGrammar=Sequence(
         OneOf(
             "PARTITION",
@@ -535,16 +691,50 @@ sparksql_dialect.add(
                         Ref("LiteralGrammar", optional=True),
                         Ref("CommentGrammar", optional=True),
                     ),
+                    Ref("IcebergTransformationSegment", optional=True),
                 ),
             ),
         ),
+    ),
+    PartitionFieldGrammar=Sequence(
+        "PARTITION",
+        "FIELD",
+        Delimited(
+            OneOf(
+                Ref("ColumnDefinitionSegment"),
+                Sequence(
+                    Ref("ColumnReferenceSegment"),
+                    Ref("EqualsSegment", optional=True),
+                    Ref("LiteralGrammar", optional=True),
+                    Ref("CommentGrammar", optional=True),
+                ),
+                Ref("IcebergTransformationSegment", optional=True),
+            ),
+        ),
+        Sequence(
+            Ref.keyword("WITH", optional=True),
+            Delimited(
+                OneOf(
+                    Ref("ColumnDefinitionSegment"),
+                    Sequence(
+                        Ref("ColumnReferenceSegment"),
+                        Ref("EqualsSegment", optional=True),
+                        Ref("LiteralGrammar", optional=True),
+                        Ref("CommentGrammar", optional=True),
+                    ),
+                    Ref("IcebergTransformationSegment", optional=True),
+                ),
+            ),
+            optional=True,
+        ),
+        Sequence("AS", Ref("NakedIdentifierSegment"), optional=True),
     ),
     # NB: Redefined from `NakedIdentifierSegment` which uses an anti-template to
     # not match keywords; however, SparkSQL allows keywords to be used in table
     # and runtime properties.
     PropertiesNakedIdentifierSegment=RegexParser(
         r"[A-Z0-9]*[A-Z][A-Z0-9]*",
-        ansi.IdentifierSegment,
+        IdentifierSegment,
         type="properties_naked_identifier",
     ),
     ResourceFileGrammar=OneOf(
@@ -579,15 +769,27 @@ sparksql_dialect.add(
     TablePropertiesGrammar=Sequence(
         "TBLPROPERTIES", Ref("BracketedPropertyListGrammar")
     ),
+    RawQuotedLiteralSegment=OneOf(
+        TypedParser(
+            "raw_single_quote",
+            LiteralSegment,
+            type="raw_quoted_literal",
+        ),
+        TypedParser(
+            "raw_double_quote",
+            LiteralSegment,
+            type="raw_quoted_literal",
+        ),
+    ),
     BytesQuotedLiteralSegment=OneOf(
         TypedParser(
             "bytes_single_quote",
-            ansi.LiteralSegment,
+            LiteralSegment,
             type="bytes_quoted_literal",
         ),
         TypedParser(
             "bytes_double_quote",
-            ansi.LiteralSegment,
+            LiteralSegment,
             type="bytes_quoted_literal",
         ),
     ),
@@ -613,9 +815,9 @@ sparksql_dialect.add(
     ),
     AtSignLiteralSegment=TypedParser(
         "at_sign_literal",
-        ansi.LiteralSegment,
+        LiteralSegment,
         type="at_sign_literal",
-        trim_chars="@",
+        trim_chars=("@",),
     ),
     # This is the same as QuotedLiteralSegment but
     # is given a different `name` to stop LT01 flagging
@@ -623,12 +825,12 @@ sparksql_dialect.add(
     SignedQuotedLiteralSegment=OneOf(
         TypedParser(
             "single_quote",
-            ansi.LiteralSegment,
+            LiteralSegment,
             type="signed_quoted_literal",
         ),
         TypedParser(
             "double_quote",
-            ansi.LiteralSegment,
+            LiteralSegment,
             type="signed_quoted_literal",
         ),
     ),
@@ -644,6 +846,185 @@ sparksql_dialect.add(
         "DEFAULT",
         Ref("QuotedLiteralSegment"),
     ),
+    TableDefinitionSegment=Sequence(
+        OneOf(Ref("OrReplaceGrammar"), Ref("OrRefreshGrammar"), optional=True),
+        Ref("TemporaryGrammar", optional=True),
+        Ref.keyword("EXTERNAL", optional=True),
+        Ref.keyword("STREAMING", optional=True),
+        Ref.keyword("LIVE", optional=True),
+        "TABLE",
+        Ref("IfNotExistsGrammar", optional=True),
+        OneOf(
+            Ref("FileReferenceSegment"),
+            Ref("TableReferenceSegment"),
+        ),
+        OneOf(
+            # Columns and comment syntax:
+            Bracketed(
+                Delimited(
+                    Sequence(
+                        OneOf(
+                            Ref("ColumnFieldDefinitionSegment"),
+                            Ref("GeneratedColumnDefinitionSegment"),
+                            Ref("TableConstraintSegment", optional=True),
+                        ),
+                        Ref("CommentGrammar", optional=True),
+                    ),
+                    Ref("ConstraintStatementSegment", optional=True),
+                ),
+            ),
+            # Like Syntax
+            Sequence(
+                "LIKE",
+                OneOf(
+                    Ref("FileReferenceSegment"),
+                    Ref("TableReferenceSegment"),
+                ),
+            ),
+            optional=True,
+        ),
+        Ref("UsingClauseSegment", optional=True),
+        AnySetOf(
+            Ref("RowFormatClauseSegment"),
+            Ref("StoredAsGrammar"),
+            Ref("CommentGrammar"),
+            Ref("OptionsGrammar"),
+            Ref("PartitionSpecGrammar"),
+            Ref("BucketSpecGrammar"),
+            Ref("LocationGrammar"),
+            Ref("CommentGrammar"),
+            Ref("TablePropertiesGrammar"),
+            Sequence("CLUSTER", "BY", Ref("BracketedColumnReferenceListGrammar")),
+            optional=True,
+        ),
+        # Create AS syntax:
+        Sequence(
+            Ref.keyword("AS", optional=True),
+            OptionallyBracketed(Ref("SelectableGrammar")),
+            optional=True,
+        ),
+    ),
+    FirstOrAfterGrammar=Sequence(
+        OneOf(
+            "FIRST",
+            Sequence(
+                "AFTER",
+                Ref("ColumnReferenceSegment"),
+            ),
+        ),
+    ),
+    ShowDatabasesSchemasGrammar=Sequence(
+        # SHOW { DATABASES | SCHEMAS }
+        OneOf("DATABASES", "SCHEMAS"),
+        Sequence(
+            "LIKE",
+            Ref("QuotedLiteralSegment"),
+            optional=True,
+        ),
+    ),
+    ShowFunctionsGrammar=Sequence(
+        # SHOW FUNCTIONS
+        OneOf("USER", "SYSTEM", "ALL", optional=True),
+        "FUNCTIONS",
+        OneOf(
+            # qualified function from a database
+            Sequence(
+                Ref("DatabaseReferenceSegment"),
+                Ref("DotSegment"),
+                Ref("FunctionNameSegment"),
+                allow_gaps=False,
+                optional=True,
+            ),
+            # non-qualified function
+            Ref("FunctionNameSegment", optional=True),
+            Sequence(
+                "LIKE",
+                Ref("QuotedLiteralSegment"),
+                optional=True,
+            ),
+        ),
+    ),
+    ShowTablesGrammar=Sequence(
+        # SHOW TABLES
+        "TABLES",
+        Sequence(
+            OneOf("FROM", "IN"),
+            Ref("DatabaseReferenceSegment"),
+            optional=True,
+        ),
+        Sequence(
+            "LIKE",
+            Ref("QuotedLiteralSegment"),
+            optional=True,
+        ),
+    ),
+    ShowViewsGrammar=Sequence(
+        # SHOW VIEWS
+        "VIEWS",
+        Sequence(
+            OneOf("FROM", "IN"),
+            Ref("DatabaseReferenceSegment"),
+            optional=True,
+        ),
+        Sequence(
+            "LIKE",
+            Ref("QuotedLiteralSegment"),
+            optional=True,
+        ),
+    ),
+    ShowObjectGrammar=OneOf(
+        # SHOW CREATE TABLE
+        Sequence(
+            "CREATE",
+            "TABLE",
+            Ref("TableExpressionSegment"),
+            Sequence(
+                "AS",
+                "SERDE",
+                optional=True,
+            ),
+        ),
+        # SHOW COLUMNS
+        Sequence(
+            "COLUMNS",
+            "IN",
+            Ref("TableExpressionSegment"),
+            Sequence(
+                "IN",
+                Ref("DatabaseReferenceSegment"),
+                optional=True,
+            ),
+        ),
+        # SHOW PARTITIONS
+        Sequence(
+            "PARTITIONS",
+            Ref("TableReferenceSegment"),
+            Ref("PartitionSpecGrammar", optional=True),
+        ),
+        # SHOW TABLE EXTENDED
+        Sequence(
+            "TABLE",
+            "EXTENDED",
+            Sequence(
+                OneOf("FROM", "IN"),
+                Ref("DatabaseReferenceSegment"),
+                optional=True,
+            ),
+            "LIKE",
+            Ref("QuotedLiteralSegment"),
+            Ref("PartitionSpecGrammar", optional=True),
+        ),
+        # SHOW TBLPROPERTIES
+        Sequence(
+            "TBLPROPERTIES",
+            Ref("TableReferenceSegment"),
+            Ref("BracketedPropertyNameListGrammar", optional=True),
+        ),
+        Ref("ShowDatabasesSchemasGrammar"),
+        Ref("ShowFunctionsGrammar"),
+        Ref("ShowTablesGrammar"),
+        Ref("ShowViewsGrammar"),
+    ),
 )
 
 # Adding Hint related grammar before comment `block_comment` and
@@ -652,14 +1033,14 @@ sparksql_dialect.add(
 # https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-hints.html
 sparksql_dialect.insert_lexer_matchers(
     [
-        RegexLexer("start_hint", r"\/\*\+", CodeSegment),
+        StringLexer("start_hint", "/*+", CodeSegment),
     ],
     before="block_comment",
 )
 
 sparksql_dialect.insert_lexer_matchers(
     [
-        RegexLexer("end_hint", r"\*\/", CodeSegment),
+        StringLexer("end_hint", "*/", CodeSegment),
     ],
     before="single_quote",
 )
@@ -675,6 +1056,17 @@ sparksql_dialect.insert_lexer_matchers(
 )
 
 
+class SQLConfPropertiesSegment(BaseSegment):
+    """A SQL Config Option."""
+
+    type = "sql_conf_option"
+    match_grammar = Sequence(
+        StringParser("-", SymbolSegment, type="dash"),
+        StringParser("v", SymbolSegment, type="sql_conf_option"),
+        allow_gaps=False,
+    )
+
+
 class DivBinaryOperatorSegment(BaseSegment):
     """DIV type binary_operator."""
 
@@ -686,15 +1078,9 @@ class QualifyClauseSegment(BaseSegment):
     """A `QUALIFY` clause like in `SELECT`."""
 
     type = "qualify_clause"
-    match_grammar = StartsWith(
+    match_grammar = Sequence(
         "QUALIFY",
-        terminator=OneOf("WINDOW", Sequence("ORDER", "BY"), "LIMIT"),
-        enforce_whitespace_preceding_terminator=True,
-    )
-
-    parse_grammar = Sequence(
-        "QUALIFY",
-        Indent,
+        ImplicitIndent,
         OptionallyBracketed(Ref("ExpressionSegment")),
         Dedent,
     )
@@ -728,6 +1114,7 @@ class PrimitiveTypeSegment(BaseSegment):
         "TINYINT",
         # TODO : not currently supported; add segment - see NumericLiteralSegment
         # "SHORT",
+        "LONG",
         "SMALLINT",
         "INT",
         "INTEGER",
@@ -737,26 +1124,74 @@ class PrimitiveTypeSegment(BaseSegment):
         "DOUBLE",
         "DATE",
         "TIMESTAMP",
+        "TIMESTAMP_LTZ",
+        "TIMESTAMP_NTZ",
         "STRING",
         Sequence(
-            OneOf("CHAR", "CHARACTER", "VARCHAR"),
-            Bracketed(Ref("NumericLiteralSegment"), optional=True),
+            OneOf("CHAR", "CHARACTER", "VARCHAR", "DECIMAL", "DEC", "NUMERIC"),
+            Ref("BracketedArguments", optional=True),
         ),
         "BINARY",
-        Sequence(
-            OneOf("DECIMAL", "DEC", "NUMERIC"),
-            Bracketed(
-                Ref("NumericLiteralSegment"),
-                Ref("CommaSegment"),
-                Ref("NumericLiteralSegment"),
-                optional=True,
-            ),
-        ),
         "INTERVAL",
+        "VARIANT",
     )
 
 
-class DatatypeSegment(PrimitiveTypeSegment):
+class ArrayTypeSegment(hive.ArrayTypeSegment):
+    """ARRAY type as per hive."""
+
+    pass
+
+
+class StructTypeSegment(hive.StructTypeSegment):
+    """STRUCT type as per hive."""
+
+    pass
+
+
+class StructTypeSchemaSegment(hive.StructTypeSchemaSegment):
+    """STRUCT type schema as per hive."""
+
+    pass
+
+
+class SemiStructuredAccessorSegment(BaseSegment):
+    """A semi-structured data accessor segment.
+
+    https://docs.databricks.com/en/sql/language-manual/functions/colonsign.html
+    """
+
+    type = "semi_structured_expression"
+    match_grammar = Sequence(
+        Ref("ColonSegment"),
+        OneOf(
+            Ref("NakedSemiStructuredElementSegment"),
+            Bracketed(Ref("QuotedSemiStructuredElementSegment"), bracket_type="square"),
+        ),
+        Ref("ArrayAccessorSegment", optional=True),
+        AnyNumberOf(
+            Sequence(
+                OneOf(
+                    # Can be delimited by dots or colons
+                    Ref("DotSegment"),
+                    Ref("ColonSegment"),
+                ),
+                OneOf(
+                    Ref("NakedSemiStructuredElementSegment"),
+                    Bracketed(
+                        Ref("QuotedSemiStructuredElementSegment"), bracket_type="square"
+                    ),
+                ),
+                allow_gaps=True,
+            ),
+            Ref("ArrayAccessorSegment", optional=True),
+            allow_gaps=True,
+        ),
+        allow_gaps=True,
+    )
+
+
+class DatatypeSegment(BaseSegment):
     """Spark SQL Data types.
 
     https://spark.apache.org/docs/latest/sql-ref-datatypes.html
@@ -765,19 +1200,12 @@ class DatatypeSegment(PrimitiveTypeSegment):
     type = "data_type"
     match_grammar = OneOf(
         Ref("PrimitiveTypeSegment"),
-        Sequence(
-            "ARRAY",
-            Bracketed(
-                Ref("DatatypeSegment"),
-                bracket_pairs_set="angle_bracket_pairs",
-                bracket_type="angle",
-            ),
-        ),
+        Ref("ArrayTypeSegment"),
         Sequence(
             "MAP",
             Bracketed(
                 Sequence(
-                    Ref("PrimitiveTypeSegment"),
+                    Ref("DatatypeSegment"),
                     Ref("CommaSegment"),
                     Ref("DatatypeSegment"),
                 ),
@@ -785,23 +1213,7 @@ class DatatypeSegment(PrimitiveTypeSegment):
                 bracket_type="angle",
             ),
         ),
-        Sequence(
-            "STRUCT",
-            Bracketed(
-                # CommentGrammar here is valid Spark SQL
-                # even though its not stored in Sparks Catalog
-                Delimited(
-                    Sequence(
-                        Ref("SingleIdentifierGrammar"),
-                        Ref("ColonSegment"),
-                        Ref("DatatypeSegment"),
-                        Ref("CommentGrammar", optional=True),
-                    ),
-                ),
-                bracket_pairs_set="angle_bracket_pairs",
-                bracket_type="angle",
-            ),
-        ),
+        Ref("StructTypeSegment"),
     )
 
 
@@ -820,7 +1232,10 @@ class AlterDatabaseStatementSegment(BaseSegment):
         OneOf("DATABASE", "SCHEMA"),
         Ref("DatabaseReferenceSegment"),
         "SET",
-        Ref("DatabasePropertiesGrammar"),
+        OneOf(
+            Ref("DatabasePropertiesGrammar"),
+            Ref("LocationGrammar"),
+        ),
     )
 
 
@@ -852,23 +1267,24 @@ class AlterTableStatementSegment(ansi.AlterTableStatementSegment):
                 "TO",
                 Ref("PartitionSpecGrammar"),
             ),
+            # ALTER TABLE - RENAME TO 'column_identifier'
+            Sequence(
+                "RENAME",
+                "COLUMN",
+                Ref("ColumnReferenceSegment"),
+                "TO",
+                Ref("ColumnReferenceSegment"),
+            ),
             # ALTER TABLE - ADD COLUMNS
             Sequence(
                 "ADD",
-                "COLUMNS",
+                OneOf("COLUMNS", "COLUMN"),
                 Indent,
                 OptionallyBracketed(
                     Delimited(
                         Sequence(
-                            Ref("ColumnDefinitionSegment"),
-                            OneOf(
-                                "FIRST",
-                                Sequence(
-                                    "AFTER",
-                                    Ref("ColumnReferenceSegment"),
-                                ),
-                                optional=True,
-                            ),
+                            Ref("ColumnFieldDefinitionSegment"),
+                            Ref("FirstOrAfterGrammar", optional=True),
                         ),
                     ),
                 ),
@@ -897,14 +1313,7 @@ class AlterTableStatementSegment(ansi.AlterTableStatementSegment):
                 Ref.keyword("TYPE", optional=True),
                 Ref("DatatypeSegment", optional=True),
                 Ref("CommentGrammar", optional=True),
-                OneOf(
-                    "FIRST",
-                    Sequence(
-                        "AFTER",
-                        Ref("ColumnReferenceSegment"),
-                    ),
-                    optional=True,
-                ),
+                Ref("FirstOrAfterGrammar", optional=True),
                 Sequence(OneOf("SET", "DROP"), "NOT", "NULL", optional=True),
                 Dedent,
             ),
@@ -928,10 +1337,12 @@ class AlterTableStatementSegment(ansi.AlterTableStatementSegment):
                 OneOf(
                     Sequence(
                         "COLUMN",
+                        Ref("IfExistsGrammar", optional=True),
                         Ref("ColumnReferenceSegment"),
                     ),
                     Sequence(
                         "COLUMNS",
+                        Ref("IfExistsGrammar", optional=True),
                         Bracketed(
                             Delimited(AnyNumberOf(Ref("ColumnReferenceSegment"))),
                         ),
@@ -942,14 +1353,25 @@ class AlterTableStatementSegment(ansi.AlterTableStatementSegment):
             Sequence(
                 "ADD",
                 Ref("IfNotExistsGrammar", optional=True),
-                AnyNumberOf(Ref("PartitionSpecGrammar"), min_times=1),
+                AnyNumberOf(
+                    Ref("PartitionSpecGrammar"),
+                    Ref("PartitionFieldGrammar"),
+                    min_times=1,
+                ),
             ),
             # ALTER TABLE - DROP PARTITION
             Sequence(
                 "DROP",
                 Ref("IfExistsGrammar", optional=True),
-                Ref("PartitionSpecGrammar"),
+                OneOf(
+                    Ref("PartitionSpecGrammar"),
+                    Ref("PartitionFieldGrammar"),
+                ),
                 Sequence("PURGE", optional=True),
+            ),
+            Sequence(
+                "Replace",
+                Ref("PartitionFieldGrammar"),
             ),
             # ALTER TABLE - REPAIR PARTITION
             Sequence("RECOVER", "PARTITIONS"),
@@ -978,11 +1400,11 @@ class AlterTableStatementSegment(ansi.AlterTableStatementSegment):
                 Ref("PartitionSpecGrammar", optional=True),
                 "SET",
                 "FILEFORMAT",
-                Ref("DataSourceFormatGrammar"),
+                Ref("DataSourceFormatSegment"),
             ),
             # ALTER TABLE - CHANGE FILE LOCATION
             Sequence(
-                Ref("PartitionSpecGrammar"),
+                Ref("PartitionSpecGrammar", optional=True),
                 "SET",
                 Ref("LocationGrammar"),
             ),
@@ -999,8 +1421,82 @@ class AlterTableStatementSegment(ansi.AlterTableStatementSegment):
                 Bracketed(Ref("ExpressionSegment"), optional=True),
                 Dedent,
             ),
+            # ALTER TABLE - ICEBERG WRITE ORDER / DISTRIBUTION
+            # https://iceberg.apache.org/docs/latest/spark-ddl/#alter-table--write-ordered-by
+            Sequence(
+                "WRITE",
+                AnyNumberOf(
+                    Sequence("DISTRIBUTED", "BY", "PARTITION", optional=True),
+                    Sequence(
+                        Ref.keyword("LOCALLY", optional=True),
+                        "ORDERED",
+                        "BY",
+                        Indent,
+                        Delimited(
+                            Sequence(
+                                Ref("ColumnReferenceSegment"),
+                                OneOf("ASC", "DESC", optional=True),
+                                # NB: This isn't really ANSI, and isn't supported
+                                # in Mysql,but is supported in enough other dialects
+                                # for it to make sense here for now.
+                                Sequence(
+                                    "NULLS", OneOf("FIRST", "LAST"), optional=True
+                                ),
+                            ),
+                            optional=True,
+                        ),
+                        Dedent,
+                        optional=True,
+                    ),
+                    min_times=1,
+                    max_times_per_element=1,
+                ),
+            ),
+            # ALTER TABLE - ICEBERG SET IDENTIFIER FIELDS
+            Sequence(
+                "SET",
+                "IDENTIFIER",
+                "FIELDS",
+                Indent,
+                Delimited(
+                    Sequence(
+                        Ref("ColumnReferenceSegment"),
+                    ),
+                ),
+                Dedent,
+            ),
+            # ALTER TABLE - ICEBERG DROP IDENTIFIER FIELDS
+            Sequence(
+                "DROP",
+                "IDENTIFIER",
+                "FIELDS",
+                Indent,
+                Delimited(
+                    Sequence(
+                        Ref("ColumnReferenceSegment"),
+                    ),
+                ),
+                Dedent,
+            ),
         ),
         Dedent,
+    )
+
+
+class ColumnFieldDefinitionSegment(ansi.ColumnDefinitionSegment):
+    """A column field definition, e.g. for CREATE TABLE or ALTER TABLE.
+
+    This supports the iceberg syntax and allows for iceberg syntax such
+    as ADD COLUMN a.b.
+    """
+
+    match_grammar: Matchable = Sequence(
+        Ref("ColumnReferenceSegment"),  # Column name
+        Ref("DatatypeSegment"),  # Column type
+        Bracketed(Anything(), optional=True),  # For types like VARCHAR(100)
+        AnyNumberOf(
+            Ref("ColumnConstraintSegment", optional=True),
+        ),
     )
 
 
@@ -1051,15 +1547,37 @@ class CreateDatabaseStatementSegment(ansi.CreateDatabaseStatementSegment):
     )
 
 
-class CreateFunctionStatementSegment(ansi.CreateFunctionStatementSegment):
+class FunctionParameterListGrammarWithComments(BaseSegment):
+    """The parameters for a function ie. `(column type COMMENT 'comment')`."""
+
+    type = "function_parameter_list_with_comments"
+
+    match_grammar: Matchable = Bracketed(
+        Delimited(
+            Sequence(
+                Ref("FunctionParameterGrammar"),
+                AnyNumberOf(
+                    Sequence("DEFAULT", Ref("LiteralGrammar"), optional=True),
+                    Ref("CommentClauseSegment", optional=True),
+                ),
+            ),
+            optional=True,
+        ),
+    )
+
+
+class CreateFunctionStatementSegment(BaseSegment):
     """A `CREATE FUNCTION` statement.
 
     https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-function.html
+
     """
+
+    type = "create_function_statement"
 
     match_grammar = Sequence(
         "CREATE",
-        Sequence("OR", "REPLACE", optional=True),
+        Ref("OrReplaceGrammar", optional=True),
         Ref("TemporaryGrammar", optional=True),
         "FUNCTION",
         Ref("IfNotExistsGrammar", optional=True),
@@ -1078,70 +1596,7 @@ class CreateTableStatementSegment(ansi.CreateTableStatementSegment):
     https://docs.delta.io/latest/delta-batch.html#create-a-table
     """
 
-    match_grammar = Sequence(
-        "CREATE",
-        OneOf(Ref("OrReplaceGrammar"), Ref("OrRefreshGrammar"), optional=True),
-        Ref("TemporaryGrammar", optional=True),
-        Ref.keyword("STREAMING", optional=True),
-        Ref.keyword("LIVE", optional=True),
-        "TABLE",
-        Ref("IfNotExistsGrammar", optional=True),
-        OneOf(
-            Ref("FileReferenceSegment"),
-            Ref("TableReferenceSegment"),
-        ),
-        OneOf(
-            # Columns and comment syntax:
-            Bracketed(
-                Delimited(
-                    Sequence(
-                        OneOf(
-                            Ref("ColumnDefinitionSegment"),
-                            Ref("GeneratedColumnDefinitionSegment"),
-                        ),
-                        Ref("CommentGrammar", optional=True),
-                    ),
-                ),
-            ),
-            # Like Syntax
-            Sequence(
-                "LIKE",
-                OneOf(
-                    Ref("FileReferenceSegment"),
-                    Ref("TableReferenceSegment"),
-                ),
-            ),
-            optional=True,
-        ),
-        Sequence("USING", Ref("DataSourceFormatGrammar"), optional=True),
-        Ref("RowFormatClauseSegment", optional=True),
-        Ref("StoredAsGrammar", optional=True),
-        Ref("OptionsGrammar", optional=True),
-        Ref("PartitionSpecGrammar", optional=True),
-        Ref("BucketSpecGrammar", optional=True),
-        Indent,
-        AnyNumberOf(
-            Ref("LocationGrammar", optional=True),
-            Ref("CommentGrammar", optional=True),
-            Ref("TablePropertiesGrammar", optional=True),
-        ),
-        Dedent,
-        # Create AS syntax:
-        Sequence(
-            Ref.keyword("AS", optional=True),
-            OptionallyBracketed(Ref("SelectableGrammar")),
-            optional=True,
-        ),
-    )
-
-
-class CreateHiveFormatTableStatementSegment(hive.CreateTableStatementSegment):
-    """A `CREATE TABLE` statement using Hive format.
-
-    https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-table-hiveformat.html
-    """
-
-    pass
+    match_grammar = Sequence("CREATE", Ref("TableDefinitionSegment"))
 
 
 class CreateViewStatementSegment(ansi.CreateViewStatementSegment):
@@ -1156,6 +1611,7 @@ class CreateViewStatementSegment(ansi.CreateViewStatementSegment):
         Ref("TemporaryGrammar", optional=True),
         Ref.keyword("STREAMING", optional=True),
         Ref.keyword("LIVE", optional=True),
+        Ref.keyword("MATERIALIZED", optional=True),
         "VIEW",
         Ref("IfNotExistsGrammar", optional=True),
         Ref("TableReferenceSegment"),
@@ -1165,16 +1621,19 @@ class CreateViewStatementSegment(ansi.CreateViewStatementSegment):
                 Delimited(
                     Sequence(
                         Ref("ColumnReferenceSegment"),
+                        Ref("DatatypeSegment", optional=True),
                         Ref("CommentGrammar", optional=True),
                     ),
+                    Ref("ConstraintStatementSegment", optional=True),
                 ),
             ),
             optional=True,
         ),
+        Sequence("USING", Ref("DataSourceFormatSegment"), optional=True),
+        Ref("OptionsGrammar", optional=True),
         Ref("CommentGrammar", optional=True),
         Ref("TablePropertiesGrammar", optional=True),
-        "AS",
-        OptionallyBracketed(Ref("SelectableGrammar")),
+        Sequence("AS", OptionallyBracketed(Ref("SelectableGrammar")), optional=True),
         Ref("WithNoSchemaBindingClauseSegment", optional=True),
     )
 
@@ -1204,6 +1663,16 @@ class CreateWidgetStatementSegment(BaseSegment):
     )
 
 
+class ReplaceTableStatementSegment(BaseSegment):
+    """A `REPLACE TABLE` statement using the iceberg table format.
+
+    https://iceberg.apache.org/docs/latest/spark-ddl/#replace-table--as-select
+    """
+
+    type = "replace_table_statement"
+    match_grammar = Sequence("REPLACE", Ref("TableDefinitionSegment"))
+
+
 class RemoveWidgetStatementSegment(BaseSegment):
     """A `REMOVE WIDGET` STATEMENT.
 
@@ -1216,6 +1685,22 @@ class RemoveWidgetStatementSegment(BaseSegment):
         "REMOVE",
         "WIDGET",
         Ref("WidgetNameIdentifierSegment"),
+    )
+
+
+class DropDatabaseStatementSegment(ansi.DropDatabaseStatementSegment):
+    """A `DROP DATABASE` statement.
+
+    https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-drop-database.html
+    """
+
+    type = "drop_database_statement"
+    match_grammar: Matchable = Sequence(
+        "DROP",
+        OneOf("DATABASE", "SCHEMA"),
+        Ref("IfExistsGrammar", optional=True),
+        Ref("DatabaseReferenceSegment"),
+        Ref("DropBehaviorGrammar", optional=True),
     )
 
 
@@ -1334,7 +1819,7 @@ class InsertOverwriteDirectorySegment(BaseSegment):
         "DIRECTORY",
         Ref("QuotedLiteralSegment", optional=True),
         "USING",
-        Ref("DataSourceFormatGrammar"),
+        Ref("DataSourceFormatSegment"),
         Ref("OptionsGrammar", optional=True),
         OneOf(
             AnyNumberOf(
@@ -1405,19 +1890,7 @@ class ClusterByClauseSegment(BaseSegment):
 
     type = "cluster_by_clause"
 
-    match_grammar = StartsWith(
-        Sequence("CLUSTER", "BY"),
-        terminator=OneOf(
-            "LIMIT",
-            "HAVING",
-            # For window functions
-            "WINDOW",
-            Ref("FrameClauseUnitGrammar"),
-            "SEPARATOR",
-        ),
-    )
-
-    parse_grammar = Sequence(
+    match_grammar = Sequence(
         "CLUSTER",
         "BY",
         Indent,
@@ -1431,11 +1904,14 @@ class ClusterByClauseSegment(BaseSegment):
                     Ref("ExpressionSegment"),
                 ),
             ),
-            terminator=OneOf(
-                "WINDOW",
+            terminators=[
                 "LIMIT",
+                "HAVING",
+                # For window functions
+                "WINDOW",
                 Ref("FrameClauseUnitGrammar"),
-            ),
+                "SEPARATOR",
+            ],
         ),
         Dedent,
     )
@@ -1450,19 +1926,7 @@ class DistributeByClauseSegment(BaseSegment):
 
     type = "distribute_by_clause"
 
-    match_grammar = StartsWith(
-        Sequence("DISTRIBUTE", "BY"),
-        terminator=OneOf(
-            "LIMIT",
-            "HAVING",
-            # For window functions
-            "WINDOW",
-            Ref("FrameClauseUnitGrammar"),
-            "SEPARATOR",
-        ),
-    )
-
-    parse_grammar = Sequence(
+    match_grammar = Sequence(
         "DISTRIBUTE",
         "BY",
         Indent,
@@ -1476,11 +1940,15 @@ class DistributeByClauseSegment(BaseSegment):
                     Ref("ExpressionSegment"),
                 ),
             ),
-            terminator=OneOf(
-                "WINDOW",
+            terminators=[
+                "SORT",
                 "LIMIT",
+                "HAVING",
+                # For window functions
+                "WINDOW",
                 Ref("FrameClauseUnitGrammar"),
-            ),
+                "SEPARATOR",
+            ],
         ),
         Dedent,
     )
@@ -1496,17 +1964,7 @@ class HintFunctionSegment(BaseSegment):
 
     match_grammar = Sequence(
         Ref("FunctionNameSegment"),
-        Bracketed(
-            Delimited(
-                AnyNumberOf(
-                    Ref("SingleIdentifierGrammar"),
-                    Ref("NumericLiteralSegment"),
-                    min_times=1,
-                ),
-            ),
-            # May be Bare Function unique to Hints, i.e. REBALANCE
-            optional=True,
-        ),
+        Ref("FunctionContentsSegment", optional=True),
     )
 
 
@@ -1527,7 +1985,7 @@ class SelectHintSegment(BaseSegment):
                     # At least function should be supplied
                     min_times=1,
                 ),
-                terminator=Ref("EndHintSegment"),
+                terminators=[Ref("EndHintSegment")],
             ),
             Ref("EndHintSegment"),
         ),
@@ -1576,6 +2034,7 @@ class SetOperatorSegment(ansi.SetOperatorSegment):
             OneOf("UNION", "INTERSECT"),
             OneOf("DISTINCT", "ALL", optional=True),
         ),
+        exclude=Sequence("EXCEPT", Bracketed(Anything())),
     )
 
 
@@ -1616,9 +2075,13 @@ class UnorderedSelectStatementSegment(ansi.UnorderedSelectStatementSegment):
     SelectStatementSegment.
     """
 
-    match_grammar = ansi.UnorderedSelectStatementSegment.match_grammar
-    parse_grammar = ansi.UnorderedSelectStatementSegment.parse_grammar.copy(
-        insert=[Ref("QualifyClauseSegment", optional=True)],
+    match_grammar = ansi.UnorderedSelectStatementSegment.match_grammar.copy(
+        insert=[
+            Ref("QualifyClauseSegment", optional=True),
+            Ref("ClusterByClauseSegment", optional=True),
+            Ref("DistributeByClauseSegment", optional=True),
+            Ref("SortByClauseSegment", optional=True),
+        ],
         # Removing non-valid clauses that exist in ANSI dialect
         remove=[Ref("OverlapsClauseSegment", optional=True)],
     )
@@ -1627,8 +2090,7 @@ class UnorderedSelectStatementSegment(ansi.UnorderedSelectStatementSegment):
 class SelectStatementSegment(ansi.SelectStatementSegment):
     """Enhance `SELECT` statement for valid SparkSQL clauses."""
 
-    match_grammar = ansi.SelectStatementSegment.match_grammar
-    parse_grammar = ansi.SelectStatementSegment.parse_grammar.copy(
+    match_grammar = ansi.SelectStatementSegment.match_grammar.copy(
         # TODO New Rule: Warn of mutual exclusion of following clauses
         #  DISTRIBUTE, SORT, CLUSTER and ORDER BY if multiple specified
         insert=[
@@ -1644,37 +2106,39 @@ class SelectStatementSegment(ansi.SelectStatementSegment):
 
 
 class GroupByClauseSegment(ansi.GroupByClauseSegment):
-    """Enhance `GROUP BY` clause like in `SELECT` for 'CUBE' and 'ROLLUP`.
+    """Enhance `GROUP BY` clause like in `SELECT` for `CUBE` and `ROLLUP`.
 
     https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html
     """
 
-    match_grammar = StartsWith(
-        Sequence("GROUP", "BY"),
-        terminator=Ref("GroupByClauseTerminatorGrammar"),
-        enforce_whitespace_preceding_terminator=True,
-    )
-
-    parse_grammar = Sequence(
+    match_grammar = Sequence(
         "GROUP",
         "BY",
         Indent,
-        Delimited(
-            OneOf(
+        OneOf(
+            Delimited(
+                Ref("CubeRollupClauseSegment"),
+                Ref("GroupingSetsClauseSegment"),
                 Ref("ColumnReferenceSegment"),
                 # Can `GROUP BY 1`
                 Ref("NumericLiteralSegment"),
                 # Can `GROUP BY coalesce(col, 1)`
                 Ref("ExpressionSegment"),
-                Ref("CubeRollupClauseSegment"),
-                Ref("GroupingSetsClauseSegment"),
             ),
-            terminator=Ref("GroupByClauseTerminatorGrammar"),
+            Sequence(
+                Delimited(
+                    Ref("ColumnReferenceSegment"),
+                    # Can `GROUP BY 1`
+                    Ref("NumericLiteralSegment"),
+                    # Can `GROUP BY coalesce(col, 1)`
+                    Ref("ExpressionSegment"),
+                ),
+                OneOf(
+                    Ref("WithCubeRollupClauseSegment"),
+                    Ref("GroupingSetsClauseSegment"),
+                ),
+            ),
         ),
-        # TODO: New Rule
-        #  Warn if CubeRollupClauseSegment and
-        #  WithCubeRollupClauseSegment used in same query
-        Ref("WithCubeRollupClauseSegment", optional=True),
         Dedent,
     )
 
@@ -1693,73 +2157,6 @@ class WithCubeRollupClauseSegment(BaseSegment):
     )
 
 
-class CubeRollupClauseSegment(BaseSegment):
-    """`[CUBE | ROLLUP]` clause within the `GROUP BY` clause.
-
-    https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html
-    """
-
-    type = "cube_rollup_clause"
-
-    match_grammar = StartsWith(
-        OneOf("CUBE", "ROLLUP"),
-        terminator=OneOf(
-            "HAVING",
-            Sequence("ORDER", "BY"),
-            "LIMIT",
-            Ref("SetOperatorSegment"),
-        ),
-    )
-
-    parse_grammar = Sequence(
-        OneOf("CUBE", "ROLLUP"),
-        Bracketed(
-            Ref("GroupingExpressionList"),
-        ),
-    )
-
-
-class GroupingSetsClauseSegment(BaseSegment):
-    """`GROUPING SETS` clause within the `GROUP BY` clause."""
-
-    type = "grouping_sets_clause"
-
-    match_grammar = StartsWith(
-        Sequence("GROUPING", "SETS"),
-        terminator=OneOf(
-            "HAVING",
-            Sequence("ORDER", "BY"),
-            "LIMIT",
-            Ref("SetOperatorSegment"),
-        ),
-    )
-
-    parse_grammar = Sequence(
-        "GROUPING",
-        "SETS",
-        Bracketed(
-            Delimited(
-                Ref("CubeRollupClauseSegment"),
-                Ref("GroupingExpressionList"),
-            )
-        ),
-    )
-
-
-class GroupingExpressionList(BaseSegment):
-    """Grouping expression list within `CUBE` / `ROLLUP` `GROUPING SETS`."""
-
-    type = "grouping_expression_list"
-
-    match_grammar = Delimited(
-        OneOf(
-            Bracketed(Delimited(Ref("ExpressionSegment"))),
-            Ref("ExpressionSegment"),
-            Bracketed(),  # Allows empty parentheses
-        )
-    )
-
-
 class SortByClauseSegment(BaseSegment):
     """A `SORT BY` clause like in `SELECT`.
 
@@ -1769,19 +2166,7 @@ class SortByClauseSegment(BaseSegment):
 
     type = "sort_by_clause"
 
-    match_grammar = StartsWith(
-        Sequence("SORT", "BY"),
-        terminator=OneOf(
-            "LIMIT",
-            "HAVING",
-            "QUALIFY",
-            # For window functions
-            "WINDOW",
-            Ref("FrameClauseUnitGrammar"),
-            "SEPARATOR",
-        ),
-    )
-    parse_grammar = Sequence(
+    match_grammar = Sequence(
         "SORT",
         "BY",
         Indent,
@@ -1800,10 +2185,15 @@ class SortByClauseSegment(BaseSegment):
                 # sense here for now.
                 Sequence("NULLS", OneOf("FIRST", "LAST"), optional=True),
             ),
-            terminator=OneOf(
+            terminators=[
                 "LIMIT",
+                "HAVING",
+                "QUALIFY",
+                # For window functions
+                "WINDOW",
                 Ref("FrameClauseUnitGrammar"),
-            ),
+                "SEPARATOR",
+            ],
         ),
         Dedent,
     )
@@ -1850,15 +2240,18 @@ class LateralViewClauseSegment(BaseSegment):
         "VIEW",
         Ref.keyword("OUTER", optional=True),
         Ref("FunctionSegment"),
-        # NB: AliasExpressionSegment is not used here for table
-        # or column alias because `AS` is optional within it
-        # (and in most scenarios). Here it's explicitly defined
-        # for when it is required and not allowed.
-        Ref("SingleIdentifierGrammar", optional=True),
-        Sequence(
-            "AS",
-            Delimited(
+        OneOf(
+            Sequence(
                 Ref("SingleIdentifierGrammar"),
+                Sequence(
+                    Ref.keyword("AS", optional=True),
+                    Delimited(Ref("SingleIdentifierGrammar")),
+                    optional=True,
+                ),
+            ),
+            Sequence(
+                Ref.keyword("AS", optional=True),
+                Delimited(Ref("SingleIdentifierGrammar")),
             ),
         ),
         Dedent,
@@ -1880,7 +2273,7 @@ class PivotClauseSegment(BaseSegment):
             Indent,
             Delimited(
                 Sequence(
-                    Ref("FunctionSegment"),
+                    Ref("BaseExpressionElementGrammar"),
                     Ref("AliasExpressionSegment", optional=True),
                 ),
             ),
@@ -1901,8 +2294,8 @@ class PivotClauseSegment(BaseSegment):
                             Bracketed(
                                 Delimited(
                                     Ref("ExpressionSegment"),
-                                    ephemeral_name="ValuesClauseElements",
-                                )
+                                ),
+                                parse_mode=ParseMode.GREEDY,
                             ),
                             Delimited(
                                 Ref("ExpressionSegment"),
@@ -1913,6 +2306,75 @@ class PivotClauseSegment(BaseSegment):
                 ),
             ),
             Dedent,
+        ),
+        Dedent,
+    )
+
+
+class UnpivotClauseSegment(BaseSegment):
+    """An UNPIVOT expression.
+
+    https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-unpivot.html
+    """
+
+    type = "unpivot_clause"
+    match_grammar = Sequence(
+        Indent,
+        "UNPIVOT",
+        Sequence(OneOf("INCLUDE", "EXCLUDE"), "NULLS", optional=True),
+        Indent,
+        Bracketed(
+            OneOf(
+                Ref("SingleValueColumnUnpivotSegment"),
+                Ref("MultiValueColumnUnpivotSegment"),
+            ),
+        ),
+        Dedent,
+    )
+
+
+class SingleValueColumnUnpivotSegment(BaseSegment):
+    """An UNPIVOT single column syntax fragment."""
+
+    type = "unpivot_single_column"
+    match_grammar = Sequence(
+        Ref("SingleIdentifierGrammar"),
+        "FOR",
+        Ref("SingleIdentifierGrammar"),
+        "IN",
+        Bracketed(
+            Indent,
+            Delimited(
+                Sequence(
+                    Ref("ColumnReferenceSegment"),
+                    Ref("AliasExpressionSegment", optional=True),
+                ),
+            ),
+            parse_mode=ParseMode.GREEDY,
+        ),
+        Dedent,
+    )
+
+
+class MultiValueColumnUnpivotSegment(BaseSegment):
+    """An UNPIVOT multiple column syntax fragment."""
+
+    type = "unpivot_multi_column"
+    match_grammar = Sequence(
+        Bracketed(Delimited(Ref("SingleIdentifierGrammar"))),
+        Indent,
+        "FOR",
+        Ref("SingleIdentifierGrammar"),
+        "IN",
+        Bracketed(
+            Indent,
+            Delimited(
+                Sequence(
+                    Bracketed(Indent, Delimited(Ref("ColumnReferenceSegment"))),
+                    Ref("AliasExpressionSegment", optional=True),
+                ),
+            ),
+            parse_mode=ParseMode.GREEDY,
         ),
         Dedent,
     )
@@ -1931,8 +2393,8 @@ class TransformClauseSegment(BaseSegment):
         Bracketed(
             Delimited(
                 Ref("SingleIdentifierGrammar"),
-                ephemeral_name="TransformClauseContents",
             ),
+            parse_mode=ParseMode.GREEDY,
         ),
         Indent,
         Ref("RowFormatClauseSegment", optional=True),
@@ -1991,7 +2453,32 @@ class AddFileSegment(BaseSegment):
     match_grammar = Sequence(
         "ADD",
         Ref("FileKeywordSegment"),
-        AnyNumberOf(Ref("QuotedLiteralSegment")),
+        AnyNumberOf(Ref("QuotedLiteralSegment"), Ref("FileLiteralSegment")),
+    )
+
+
+class FileLiteralSegment(BaseSegment):
+    """A path literal that isn't quoted.
+
+    The regular expression will pickup any paths with a leading protocol, however to
+    prevent some division operators that may look like paths, we only parse them here
+    **after** lexing.
+    """
+
+    type = "file_literal"
+    match_grammar: Matchable = OneOf(
+        TypedParser("file_literal", LiteralSegment),
+        Sequence(
+            Ref("SlashSegment", optional=True),
+            Delimited(
+                Delimited(
+                    TypedParser("word", WordSegment, type="path_segment"),
+                    delimiter=Ref("DotSegment"),
+                ),
+                delimiter=Ref("SlashSegment"),
+                allow_gaps=False,
+            ),
+        ),
     )
 
 
@@ -2006,7 +2493,10 @@ class AddJarSegment(BaseSegment):
     match_grammar = Sequence(
         "ADD",
         Ref("JarKeywordSegment"),
-        AnyNumberOf(Ref("QuotedLiteralSegment")),
+        AnyNumberOf(
+            Ref("QuotedLiteralSegment"),
+            Ref("FileLiteralSegment"),
+        ),
     )
 
 
@@ -2083,8 +2573,9 @@ class CacheTableSegment(BaseSegment):
         "TABLE",
         Ref("TableReferenceSegment"),
         Ref("OptionsGrammar", optional=True),
-        Ref.keyword("AS", optional=True),
-        Ref("SelectableGrammar"),
+        Sequence(
+            Ref.keyword("AS", optional=True), Ref("SelectableGrammar"), optional=True
+        ),
     )
 
 
@@ -2122,66 +2613,7 @@ class DescribeStatementSegment(BaseSegment):
 
     match_grammar = Sequence(
         OneOf("DESCRIBE", "DESC"),
-        OneOf(
-            Sequence(
-                "DATABASE",
-                Ref.keyword("EXTENDED", optional=True),
-                Ref("DatabaseReferenceSegment"),
-            ),
-            Sequence(
-                "FUNCTION",
-                Ref.keyword("EXTENDED", optional=True),
-                Ref("FunctionNameSegment"),
-            ),
-            Sequence(
-                Ref.keyword("TABLE", optional=True),
-                Ref.keyword("EXTENDED", optional=True),
-                Ref("TableReferenceSegment"),
-                Ref("PartitionSpecGrammar", optional=True),
-                # can be fully qualified column after table is listed
-                # [database.][table.][column]
-                Sequence(
-                    Ref("SingleIdentifierGrammar"),
-                    AnyNumberOf(
-                        Sequence(
-                            Ref("DotSegment"),
-                            Ref("SingleIdentifierGrammar"),
-                            allow_gaps=False,
-                        ),
-                        max_times=2,
-                        allow_gaps=False,
-                    ),
-                    optional=True,
-                    allow_gaps=False,
-                ),
-            ),
-            Sequence(
-                Ref.keyword("QUERY", optional=True),
-                OneOf(
-                    Sequence(
-                        "TABLE",
-                        Ref("TableReferenceSegment"),
-                    ),
-                    Sequence(
-                        "FROM",
-                        Ref("TableReferenceSegment"),
-                        "SELECT",
-                        Delimited(
-                            Ref("ColumnReferenceSegment"),
-                        ),
-                        Ref("WhereClauseSegment", optional=True),
-                        Ref("GroupByClauseSegment", optional=True),
-                        Ref("OrderByClauseSegment", optional=True),
-                        Ref("LimitClauseSegment", optional=True),
-                    ),
-                    Ref("StatementSegment"),
-                ),
-            ),
-            exclude=OneOf(
-                Ref.keyword("HISTORY"),
-                Ref.keyword("DETAIL"),
-            ),
-        ),
+        Ref("DescribeObjectGrammar"),
     )
 
 
@@ -2196,7 +2628,7 @@ class ListFileSegment(BaseSegment):
     match_grammar = Sequence(
         "LIST",
         Ref("FileKeywordSegment"),
-        AnyNumberOf(Ref("QuotedLiteralSegment")),
+        AnyNumberOf(Ref("QuotedLiteralSegment"), Ref("FileLiteralSegment")),
     )
 
 
@@ -2211,7 +2643,7 @@ class ListJarSegment(BaseSegment):
     match_grammar = Sequence(
         "LIST",
         Ref("JarKeywordSegment"),
-        AnyNumberOf(Ref("QuotedLiteralSegment")),
+        AnyNumberOf(Ref("QuotedLiteralSegment"), Ref("FileLiteralSegment")),
     )
 
 
@@ -2306,114 +2738,7 @@ class ShowStatement(BaseSegment):
 
     match_grammar = Sequence(
         "SHOW",
-        OneOf(
-            # SHOW CREATE TABLE
-            Sequence(
-                "CREATE",
-                "TABLE",
-                Ref("TableExpressionSegment"),
-                Sequence(
-                    "AS",
-                    "SERDE",
-                    optional=True,
-                ),
-            ),
-            # SHOW COLUMNS
-            Sequence(
-                "COLUMNS",
-                "IN",
-                Ref("TableExpressionSegment"),
-                Sequence(
-                    "IN",
-                    Ref("DatabaseReferenceSegment"),
-                    optional=True,
-                ),
-            ),
-            # SHOW { DATABASES | SCHEMAS }
-            Sequence(
-                OneOf("DATABASES", "SCHEMAS"),
-                Sequence(
-                    "LIKE",
-                    Ref("QuotedLiteralSegment"),
-                    optional=True,
-                ),
-            ),
-            # SHOW FUNCTIONS
-            Sequence(
-                OneOf("USER", "SYSTEM", "ALL", optional=True),
-                "FUNCTIONS",
-                OneOf(
-                    # qualified function from a database
-                    Sequence(
-                        Ref("DatabaseReferenceSegment"),
-                        Ref("DotSegment"),
-                        Ref("FunctionNameSegment"),
-                        allow_gaps=False,
-                        optional=True,
-                    ),
-                    # non-qualified function
-                    Ref("FunctionNameSegment", optional=True),
-                    Sequence(
-                        "LIKE",
-                        Ref("QuotedLiteralSegment"),
-                        optional=True,
-                    ),
-                ),
-            ),
-            # SHOW PARTITIONS
-            Sequence(
-                "PARTITIONS",
-                Ref("TableReferenceSegment"),
-                Ref("PartitionSpecGrammar", optional=True),
-            ),
-            # SHOW TABLE
-            Sequence(
-                "TABLE",
-                "EXTENDED",
-                Sequence(
-                    OneOf("IN", "FROM"),
-                    Ref("DatabaseReferenceSegment"),
-                    optional=True,
-                ),
-                "LIKE",
-                Ref("QuotedLiteralSegment"),
-                Ref("PartitionSpecGrammar", optional=True),
-            ),
-            # SHOW TABLES
-            Sequence(
-                "TABLES",
-                Sequence(
-                    OneOf("FROM", "IN"),
-                    Ref("DatabaseReferenceSegment"),
-                    optional=True,
-                ),
-                Sequence(
-                    "LIKE",
-                    Ref("QuotedLiteralSegment"),
-                    optional=True,
-                ),
-            ),
-            # SHOW TBLPROPERTIES
-            Sequence(
-                "TBLPROPERTIES",
-                Ref("TableReferenceSegment"),
-                Ref("BracketedPropertyNameListGrammar", optional=True),
-            ),
-            # SHOW VIEWS
-            Sequence(
-                "VIEWS",
-                Sequence(
-                    OneOf("FROM", "IN"),
-                    Ref("DatabaseReferenceSegment"),
-                    optional=True,
-                ),
-                Sequence(
-                    "LIKE",
-                    Ref("QuotedLiteralSegment"),
-                    optional=True,
-                ),
-            ),
-        ),
+        Ref("ShowObjectGrammar"),
     )
 
 
@@ -2436,15 +2761,14 @@ class UncacheTableSegment(BaseSegment):
 class StatementSegment(ansi.StatementSegment):
     """Overriding StatementSegment to allow for additional segment parsing."""
 
-    match_grammar = ansi.StatementSegment.match_grammar
-    parse_grammar = ansi.StatementSegment.parse_grammar.copy(
+    match_grammar = ansi.StatementSegment.match_grammar.copy(
         # Segments defined in Spark3 dialect
         insert=[
             # Data Definition Statements
             Ref("AlterDatabaseStatementSegment"),
             Ref("AlterTableStatementSegment"),
             Ref("AlterViewStatementSegment"),
-            Ref("CreateHiveFormatTableStatementSegment"),
+            Ref("CreateTableStatementSegment"),
             Ref("MsckRepairTableStatementSegment"),
             Ref("UseDatabaseStatementSegment"),
             # Auxiliary Statements
@@ -2480,6 +2804,8 @@ class StatementSegment(ansi.StatementSegment):
             # Databricks - widgets
             Ref("CreateWidgetStatementSegment"),
             Ref("RemoveWidgetStatementSegment"),
+            Ref("ReplaceTableStatementSegment"),
+            Ref("SetVariableStatementSegment"),
         ],
         remove=[
             Ref("TransactionStatementSegment"),
@@ -2524,10 +2850,8 @@ class JoinClauseSegment(ansi.JoinClauseSegment):
                         # ColumnReferenceSegment. This is a) so that we don't
                         # lint it as a reference and b) because the column will
                         # probably be returned anyway during parsing.
-                        Delimited(
-                            Ref("SingleIdentifierGrammar"),
-                            ephemeral_name="UsingClauseContents",
-                        )
+                        Delimited(Ref("SingleIdentifierGrammar")),
+                        parse_mode=ParseMode.GREEDY,
                     ),
                     Conditional(Dedent, indented_using_on=False),
                 ),
@@ -2615,8 +2939,8 @@ class ValuesClauseSegment(ansi.ValuesClauseSegment):
                         # INSERT INTO statement.
                         "NULL",
                         Ref("ExpressionSegment"),
-                        ephemeral_name="ValuesClauseElements",
-                    )
+                    ),
+                    parse_mode=ParseMode.GREEDY,
                 ),
                 "NULL",
                 Ref("ExpressionSegment"),
@@ -2693,18 +3017,15 @@ class FromExpressionElementSegment(ansi.FromExpressionElementSegment):
     match_grammar = Sequence(
         Ref("PreTableFunctionKeywordsGrammar", optional=True),
         OptionallyBracketed(Ref("TableExpressionSegment")),
+        Ref("SamplingExpressionSegment", optional=True),
         Ref(
             "AliasExpressionSegment",
-            exclude=Ref("SamplingExpressionSegment"),
+            exclude=OneOf(
+                Ref("FromClauseTerminatorGrammar"),
+                Ref("JoinLikeClauseGrammar"),
+            ),
             optional=True,
         ),
-        Ref("SamplingExpressionSegment", optional=True),
-        # NB: `LateralViewClauseSegment`, `NamedWindowSegment`,
-        # and `PivotClauseSegment should come after Alias/Sampling
-        # expressions so those are matched before
-        AnyNumberOf(Ref("LateralViewClauseSegment")),
-        Ref("NamedWindowSegment", optional=True),
-        Ref("PivotClauseSegment", optional=True),
         Ref("PostTableExpressionGrammar", optional=True),
     )
 
@@ -2787,9 +3108,7 @@ class MergeInsertClauseSegment(ansi.MergeInsertClauseSegment):
                 Indent,
                 Ref("BracketedColumnReferenceListGrammar"),
                 Dedent,
-                Indent,
                 Ref("ValuesClauseSegment"),
-                Dedent,
             ),
         ),
     )
@@ -2805,6 +3124,7 @@ class UpdateStatementSegment(ansi.UpdateStatementSegment):
 
     match_grammar: Matchable = Sequence(
         "UPDATE",
+        Indent,
         OneOf(
             Ref("FileReferenceSegment"),
             Ref("TableReferenceSegment"),
@@ -2816,8 +3136,9 @@ class UpdateStatementSegment(ansi.UpdateStatementSegment):
             exclude=Ref.keyword("SET"),
             optional=True,
         ),
+        Dedent,
         Ref("SetClauseListSegment"),
-        Ref("WhereClauseSegment"),
+        Ref("WhereClauseSegment", optional=True),
     )
 
 
@@ -3076,6 +3397,7 @@ class ApplyChangesIntoStatementSegment(BaseSegment):
                     Ref("BracketedColumnReferenceListGrammar"),
                 ),
             ),
+            optional=True,
         ),
         Sequence(
             "STORED",
@@ -3083,6 +3405,22 @@ class ApplyChangesIntoStatementSegment(BaseSegment):
             "SCD",
             "TYPE",
             Ref("NumericLiteralSegment"),
+            optional=True,
+        ),
+        Sequence(
+            "TRACK",
+            "HISTORY",
+            "ON",
+            OneOf(
+                Delimited(
+                    Ref("ColumnReferenceSegment"),
+                ),
+                Sequence(
+                    Ref("StarSegment"),
+                    "EXCEPT",
+                    Ref("BracketedColumnReferenceListGrammar"),
+                ),
+            ),
             optional=True,
         ),
     )
@@ -3106,7 +3444,7 @@ class ExceptClauseSegment(BaseSegment):
     type = "select_except_clause"
     match_grammar = Sequence(
         "EXCEPT",
-        Bracketed(Delimited(Ref("SingleIdentifierGrammar"))),
+        Bracketed(Delimited(Ref("ColumnReferenceSegment"))),
     )
 
 
@@ -3119,17 +3457,130 @@ class SelectClauseSegment(BaseSegment):
     """
 
     type = "select_clause"
-    match_grammar: Matchable = StartsWith(
+    match_grammar = Sequence(
         "SELECT",
-        terminator=OneOf(
-            "FROM",
-            "WHERE",
-            "UNION",
-            Sequence("ORDER", "BY"),
-            "LIMIT",
-            "OVERLAPS",
+        OneOf(
+            Ref("TransformClauseSegment"),
+            Sequence(
+                Ref(
+                    "SelectClauseModifierSegment",
+                    optional=True,
+                ),
+                Indent,
+                Delimited(
+                    Ref("SelectClauseElementSegment"),
+                    allow_trailing=True,
+                ),
+            ),
         ),
-        enforce_whitespace_preceding_terminator=True,
+        Dedent,
+        terminators=[Ref("SelectClauseTerminatorGrammar")],
+        parse_mode=ParseMode.GREEDY_ONCE_STARTED,
     )
 
-    parse_grammar: Matchable = Ref("SelectClauseSegmentGrammar")
+
+class UsingClauseSegment(BaseSegment):
+    """`USING` clause segment."""
+
+    type = "using_clause"
+    match_grammar = Sequence("USING", Ref("DataSourceFormatSegment"))
+
+
+class DataSourceFormatSegment(BaseSegment):
+    """Data source format segment."""
+
+    type = "data_source_format"
+    match_grammar = OneOf(
+        Ref("FileFormatGrammar"),
+        # NB: JDBC is part of DataSourceV2 but not included
+        # there since there are no significant syntax changes
+        "JDBC",
+        Ref(
+            "ObjectReferenceSegment"
+        ),  # This allows for formats such as org.apache.spark.sql.jdbc
+    )
+
+
+class IcebergTransformationSegment(BaseSegment):
+    """A Transformation expressions used in PARTITIONED BY.
+
+    This segment is to be used in creating hidden partitions
+    in the iceberg table format.
+    https://iceberg.apache.org/docs/latest/spark-ddl/#partitioned-by
+    """
+
+    type = "iceberg_transformation"
+    match_grammar = OneOf(
+        Sequence(
+            OneOf(
+                "YEARS",
+                "MONTHS",
+                "DAYS",
+                "DATE",
+                "HOURS",
+                "DATE_HOUR",
+            ),
+            Bracketed(Ref("ColumnReferenceSegment")),
+        ),
+        Sequence(
+            OneOf("BUCKET", "TRUNCATE"),
+            Bracketed(
+                Sequence(
+                    Ref("NumericLiteralSegment"),
+                    Ref("CommaSegment"),
+                    Ref("ColumnReferenceSegment"),
+                )
+            ),
+        ),
+    )
+
+
+class FrameClauseSegment(ansi.FrameClauseSegment):
+    """A frame clause for window functions.
+
+    This overrides the ansi dialect frame clause segment as the sparksql
+    frame clause allows for a more expressive frame syntax.
+    https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-window.html
+    """
+
+    type = "frame_clause"
+    _frame_extent = OneOf(
+        Sequence("CURRENT", "ROW"),
+        Sequence(
+            OneOf(
+                Ref("NumericLiteralSegment"),
+                "UNBOUNDED",
+                Ref("IntervalExpressionSegment"),
+            ),
+            OneOf("PRECEDING", "FOLLOWING"),
+        ),
+    )
+
+    match_grammar: Matchable = Sequence(
+        Ref("FrameClauseUnitGrammar"),
+        OneOf(_frame_extent, Sequence("BETWEEN", _frame_extent, "AND", _frame_extent)),
+    )
+
+
+class SetVariableStatementSegment(BaseSegment):
+    """A `SET VARIABLE` statement used to set session variables.
+
+    https://spark.apache.org/docs/4.0.0-preview2/sql-ref-syntax-aux-set-var.html
+    """
+
+    type = "set_variable_statement"
+
+    match_grammar = Sequence(
+        "SET",
+        OneOf(
+            "VAR",
+            "VARIABLE",
+        ),
+        OptionallyBracketed(Delimited(Ref("SingleIdentifierGrammar"))),
+        Ref("EqualsSegment"),
+        OneOf(
+            "DEFAULT",
+            OptionallyBracketed(Ref("ExpressionSegment")),
+        ),
+        allow_gaps=True,
+    )
