@@ -1,2 +1,0 @@
-RESET timezone;
-RESET ALL;

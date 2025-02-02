@@ -121,3 +121,19 @@ GO
 
 DISABLE TRIGGER safety ON DATABASE;
 GO
+
+CREATE OR ALTER TRIGGER reminder1
+ON Sales.Customer
+AFTER INSERT, UPDATE
+AS RAISERROR ('Notify Customer Relations', 16, 10);
+GO
+
+CREATE TRIGGER reminder
+ON person.address
+AFTER UPDATE
+AS
+IF (UPDATE(stateprovinceid) OR UPDATE(postalcode))
+    BEGIN
+        RAISERROR (50009, 16, 10)
+    END;
+GO

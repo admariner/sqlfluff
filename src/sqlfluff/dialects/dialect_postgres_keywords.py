@@ -9,8 +9,10 @@ There are also some keywords that are(n't) supported as types and function, but 
 isn't support for that distinction at present.
 """
 
+from typing import List, Tuple
 
-def priority_keyword_merge(*args):
+
+def priority_keyword_merge(*args: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     """Merge keyword lists, giving priority to entries in later lists.
 
     *args is a list of keyword lists, these lists should be of tuples in the form
@@ -38,7 +40,7 @@ def priority_keyword_merge(*args):
     return base_list
 
 
-def get_keywords(keyword_list, keyword_type):
+def get_keywords(keyword_list: List[Tuple[str, str]], keyword_type: str) -> List[str]:
     """Get a list of keywords of the required type.
 
     keyword_type should be one of "not-keyword", "reserved", "non-reserved"
@@ -85,7 +87,7 @@ postgres_docs_keywords = [
     ("ASYMMETRIC", "reserved"),
     ("AT", "non-reserved"),
     ("ATAN", "not-keyword"),
-    ("ATOMIC", "not-keyword"),
+    ("ATOMIC", "non-reserved"),
     ("ATTACH", "non-reserved"),
     ("ATTRIBUTE", "non-reserved"),
     ("ATTRIBUTES", "not-keyword"),
@@ -111,6 +113,7 @@ postgres_docs_keywords = [
     ("BOOL", "non-reserved-(cannot-be-function-or-type)"),
     ("BOTH", "reserved"),
     ("BOX", "non-reserved-(cannot-be-function-or-type)"),
+    ("BPCHAR", "non-reserved-(cannot-be-function-or-type)"),
     ("BREADTH", "not-keyword"),
     ("BY", "non-reserved"),
     ("BYTEA", "non-reserved-(cannot-be-function-or-type)"),
@@ -151,7 +154,7 @@ postgres_docs_keywords = [
     ("COALESCE", "non-reserved-(cannot-be-function-or-type)"),
     ("COBOL", "not-keyword"),
     ("COLLATE", "reserved"),
-    ("COLLATION", "reserved-(can-be-function-or-type)"),
+    ("COLLATION", "non-reserved"),
     ("COLLATION_CATALOG", "not-keyword"),
     ("COLLATION_NAME", "not-keyword"),
     ("COLLATION_SCHEMA", "not-keyword"),
@@ -165,6 +168,7 @@ postgres_docs_keywords = [
     ("COMMENTS", "non-reserved"),
     ("COMMIT", "non-reserved"),
     ("COMMITTED", "non-reserved"),
+    ("COMMUTATOR", "reserved-(can-be-function-or-type)"),
     ("COMPRESSION", "non-reserved"),
     ("CONCURRENTLY", "reserved-(can-be-function-or-type)"),
     ("CONDITION", "not-keyword"),
@@ -354,6 +358,7 @@ postgres_docs_keywords = [
     ("GROUPING", "non-reserved-(cannot-be-function-or-type)"),
     ("GROUPS", "non-reserved"),
     ("HANDLER", "non-reserved"),
+    ("HASHES", "reserved-(can-be-function-or-type)"),
     ("HAVING", "reserved"),
     ("HEADER", "non-reserved"),
     ("HEX", "not-keyword"),
@@ -408,6 +413,7 @@ postgres_docs_keywords = [
     ("INVOKER", "non-reserved"),
     ("IS", "reserved-(can-be-function-or-type)"),
     ("ISNULL", "reserved-(can-be-function-or-type)"),
+    ("IS_SUPERUSER", "non-reserved"),
     ("ISOLATION", "non-reserved"),
     ("JOIN", "reserved-(can-be-function-or-type)"),
     ("JSON", "not-keyword"),
@@ -434,11 +440,14 @@ postgres_docs_keywords = [
     ("LAST", "non-reserved"),
     ("LAST_VALUE", "not-keyword"),
     ("LATERAL", "reserved"),
+    ("LC_COLLATE", "non-reserved"),
+    ("LC_CTYPE", "non-reserved"),
     ("LEAD", "not-keyword"),
     ("LEADING", "reserved"),
     ("LEAKPROOF", "non-reserved"),
     ("LEAST", "non-reserved-(cannot-be-function-or-type)"),
     ("LEFT", "reserved-(can-be-function-or-type)"),
+    ("LEFTARG", "non-reserved-(cannot-be-function-or-type)"),
     ("LENGTH", "not-keyword"),
     ("LEVEL", "non-reserved"),
     ("LIBRARY", "not-keyword"),
@@ -479,6 +488,7 @@ postgres_docs_keywords = [
     ("MEASURES", "not-keyword"),
     ("MEMBER", "not-keyword"),
     ("MERGE", "non-reserved"),
+    ("MERGES", "reserved-(can-be-function-or-type)"),
     ("MESSAGE_LENGTH", "not-keyword"),
     ("MESSAGE_OCTET_LENGTH", "not-keyword"),
     ("MESSAGE_TEXT", "not-keyword"),
@@ -503,6 +513,7 @@ postgres_docs_keywords = [
     ("NATURAL", "reserved-(can-be-function-or-type)"),
     ("NCHAR", "non-reserved-(cannot-be-function-or-type)"),
     ("NCLOB", "not-keyword"),
+    ("NEGATOR", "reserved-(can-be-function-or-type)"),
     ("NESTED", "not-keyword"),
     ("NESTING", "not-keyword"),
     ("NEW", "non-reserved"),
@@ -661,7 +672,8 @@ postgres_docs_keywords = [
     ("RESTRICT", "non-reserved"),
     ("RESTRICTIVE", "non-reserved"),
     ("RESULT", "not-keyword"),
-    ("RETURN", "not-keyword"),
+    ("RETRIEVE", "non-reserved"),
+    ("RETURN", "non-reserved"),
     ("RETURNED_CARDINALITY", "not-keyword"),
     ("RETURNED_LENGTH", "not-keyword"),
     ("RETURNED_OCTET_LENGTH", "not-keyword"),
@@ -670,6 +682,7 @@ postgres_docs_keywords = [
     ("RETURNS", "non-reserved"),
     ("REVOKE", "non-reserved"),
     ("RIGHT", "reserved-(can-be-function-or-type)"),
+    ("RIGHTARG", "reserved-(can-be-function-or-type)"),
     ("ROLE", "non-reserved"),
     ("ROLLBACK", "non-reserved"),
     ("ROLLUP", "non-reserved"),
@@ -712,7 +725,9 @@ postgres_docs_keywords = [
     ("SERIAL8", "non-reserved-(cannot-be-function-or-type)"),
     ("SERIALIZABLE", "non-reserved"),
     ("SERVER", "non-reserved"),
+    ("SERVER_ENCODING", "non-reserved"),
     ("SERVER_NAME", "not-keyword"),
+    ("SERVER_VERSION", "non-reserved"),
     ("SESSION", "non-reserved"),
     ("SESSION_USER", "reserved"),
     ("SET", "non-reserved"),
@@ -923,9 +938,11 @@ postgres_nondocs_keywords = [
     ("CREATEDB", "non-reserved"),
     ("CREATEROLE", "non-reserved"),
     ("DATE", "non-reserved"),
+    ("DEPENDENCIES", "non-reserved"),
     ("DEPTH", "non-reserved"),
     ("DESCRIBE", "non-reserved"),
     ("DETERMINISTIC", "non-reserved"),
+    ("DISABLE_PAGE_SKIPPING", "non-reserved"),
     ("EXECUTION", "not-keyword"),
     ("EXTENDED", "non-reserved"),
     ("FILE", "non-reserved"),
@@ -936,6 +953,7 @@ postgres_nondocs_keywords = [
     ("HASH", "non-reserved"),
     ("ICU", "non-reserved"),
     ("IGNORE", "non-reserved"),
+    ("INDEX_CLEANUP", "non-reserved"),
     ("IS_TEMPLATE", "non-reserved"),
     ("JSON", "non-reserved"),
     ("LC_COLLATE", "non-reserved"),
@@ -945,7 +963,9 @@ postgres_nondocs_keywords = [
     ("LOGIN", "non-reserved"),
     ("LOCALE", "non-reserved"),
     ("MAIN", "non-reserved"),
+    ("MCV", "non-reserved"),
     ("MODULUS", "non-reserved"),
+    ("NDISTINCT", "non-reserved"),
     ("NOBYPASSRLS", "non-reserved"),
     ("NOCREATEDB", "non-reserved"),
     ("NOCREATEROLE", "non-reserved"),
@@ -954,6 +974,7 @@ postgres_nondocs_keywords = [
     ("NOREPLICATION", "non-reserved"),
     ("NOSUPERUSER", "non-reserved"),
     ("PLAIN", "non-reserved"),
+    ("PROCESS_TOAST", "non-reserved"),
     ("PROVIDER", "non-reserved"),
     ("PUBLIC", "non-reserved"),
     ("REMAINDER", "non-reserved"),
@@ -1018,9 +1039,14 @@ postgres_postgis_other_keywords = [
     ("EMPTY", "non-reserved"),
 ]
 
+postgres_pgvector_keywords = [
+    ("VECTOR", "non-reserved"),
+]
+
 postgres_keywords = priority_keyword_merge(
     postgres_docs_keywords,
     postgres_nondocs_keywords,
     postgres_postgis_datatype_keywords,
     postgres_postgis_other_keywords,
+    postgres_pgvector_keywords,
 )

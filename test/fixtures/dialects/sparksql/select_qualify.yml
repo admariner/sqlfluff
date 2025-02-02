@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: 6be6f8cc477e592f46d4295f5a1f1af51289aec2aac6d4a159d82733da3b4f62
+_hash: 305ec7664eba47bcfcc4efc4effe75bf27ddda3d66214a0da89e3a1060882e90
 file:
 - statement:
     select_statement:
@@ -17,9 +17,10 @@ file:
           function:
             function_name:
               function_name_identifier: RANK
-            bracketed:
-              start_bracket: (
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
             over_clause:
               keyword: OVER
               bracketed:
@@ -70,9 +71,10 @@ file:
           function:
             function_name:
               function_name_identifier: RANK
-            bracketed:
-              start_bracket: (
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
             over_clause:
               keyword: OVER
               bracketed:
@@ -133,9 +135,10 @@ file:
           function:
             function_name:
               function_name_identifier: RANK
-            bracketed:
-              start_bracket: (
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
             over_clause:
               keyword: OVER
               bracketed:
@@ -201,9 +204,10 @@ file:
           function:
             function_name:
               function_name_identifier: RANK
-            bracketed:
-              start_bracket: (
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
             over_clause:
               keyword: OVER
               bracketed:
@@ -267,9 +271,10 @@ file:
           function:
             function_name:
               function_name_identifier: RANK
-            bracketed:
-              start_bracket: (
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
             over_clause:
               keyword: OVER
               bracketed:
@@ -338,9 +343,10 @@ file:
           function:
             function_name:
               function_name_identifier: RANK
-            bracketed:
-              start_bracket: (
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
             over_clause:
               keyword: OVER
               bracketed:
@@ -404,9 +410,10 @@ file:
           function:
             function_name:
               function_name_identifier: RANK
-            bracketed:
-              start_bracket: (
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
             over_clause:
               keyword: OVER
               bracketed:
@@ -435,34 +442,6 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: Produce
-            named_window:
-              keyword: WINDOW
-              named_window_expression:
-                naked_identifier: item_window
-                keyword: AS
-                bracketed:
-                  start_bracket: (
-                  window_specification:
-                    partitionby_clause:
-                    - keyword: PARTITION
-                    - keyword: BY
-                    - expression:
-                        column_reference:
-                          naked_identifier: category
-                    orderby_clause:
-                    - keyword: ORDER
-                    - keyword: BY
-                    - column_reference:
-                        naked_identifier: purchases
-                    frame_clause:
-                    - keyword: ROWS
-                    - keyword: BETWEEN
-                    - numeric_literal: '2'
-                    - keyword: PRECEDING
-                    - keyword: AND
-                    - numeric_literal: '2'
-                    - keyword: FOLLOWING
-                  end_bracket: )
       where_clause:
         keyword: WHERE
         expression:
@@ -473,6 +452,34 @@ file:
           comparison_operator:
             raw_comparison_operator: '='
           quoted_literal: "'vegetable'"
+      named_window:
+        keyword: WINDOW
+        named_window_expression:
+          naked_identifier: item_window
+          keyword: AS
+          bracketed:
+            start_bracket: (
+            window_specification:
+              partitionby_clause:
+              - keyword: PARTITION
+              - keyword: BY
+              - expression:
+                  column_reference:
+                    naked_identifier: category
+              orderby_clause:
+              - keyword: ORDER
+              - keyword: BY
+              - column_reference:
+                  naked_identifier: purchases
+              frame_clause:
+              - keyword: ROWS
+              - keyword: BETWEEN
+              - numeric_literal: '2'
+              - keyword: PRECEDING
+              - keyword: AND
+              - numeric_literal: '2'
+              - keyword: FOLLOWING
+            end_bracket: )
       qualify_clause:
         keyword: QUALIFY
         expression:
@@ -487,3 +494,44 @@ file:
       - keyword: BY
       - column_reference:
           naked_identifier: item
+- statement_terminator: ;
+- statement:
+    select_statement:
+      select_clause:
+        keyword: SELECT
+        select_clause_element:
+          function:
+            function_name:
+              function_name_identifier: CURRENT_DATE
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
+          alias_expression:
+            keyword: AS
+            naked_identifier: p_data_date
+      qualify_clause:
+        keyword: QUALIFY
+        expression:
+          function:
+            function_name:
+              function_name_identifier: ROW_NUMBER
+            function_contents:
+              bracketed:
+                start_bracket: (
+                end_bracket: )
+            over_clause:
+              keyword: OVER
+              bracketed:
+                start_bracket: (
+                window_specification:
+                  orderby_clause:
+                  - keyword: ORDER
+                  - keyword: BY
+                  - column_reference:
+                      naked_identifier: p_data_date
+                end_bracket: )
+          comparison_operator:
+            raw_comparison_operator: '='
+          numeric_literal: '1'
+- statement_terminator: ;

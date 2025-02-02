@@ -3,18 +3,19 @@
 This is based on postgres dialect, since it was initially based off of Postgres.
 We should monitor in future and see if it should be rebased off of ANSI
 """
+
 from sqlfluff.core.dialects import load_raw_dialect
 from sqlfluff.core.parser import (
     Anything,
     BaseSegment,
     Bracketed,
     Delimited,
+    KeywordSegment,
+    MultiStringParser,
     OneOf,
     Ref,
     Sequence,
-    MultiStringParser,
 )
-from sqlfluff.core.parser.segments.raw import KeywordSegment
 from sqlfluff.dialects import dialect_ansi as ansi
 from sqlfluff.dialects.dialect_materialize_keywords import (
     materialize_reserved_keywords,
@@ -23,27 +24,33 @@ from sqlfluff.dialects.dialect_materialize_keywords import (
 
 postgres_dialect = load_raw_dialect("postgres")
 
-materialize_dialect = postgres_dialect.copy_as("materialize")
-materialize_dialect.sets("unreserved_keywords").update(
-    [n.strip().upper() for n in materialize_unreserved_keywords.split("\n")]
+materialize_dialect = postgres_dialect.copy_as(
+    "materialize",
+    formatted_name="Materialize",
+    docstring="The dialect for `Materialize <https://materialize.com/>`_.",
+)
+materialize_dialect.update_keywords_set_from_multiline_string(
+    "unreserved_keywords", materialize_unreserved_keywords
 )
 
 materialize_dialect.sets("reserved_keywords").clear()
-materialize_dialect.sets("reserved_keywords").update(
-    [n.strip().upper() for n in materialize_reserved_keywords.split("\n")]
+materialize_dialect.update_keywords_set_from_multiline_string(
+    "reserved_keywords", materialize_reserved_keywords
 )
 
 
 class StatementSegment(ansi.StatementSegment):
     """A generic segment, to any of its child subsegments."""
 
-    match_grammar = ansi.StatementSegment.match_grammar
-    parse_grammar = ansi.StatementSegment.parse_grammar.copy(
+    match_grammar = ansi.StatementSegment.match_grammar.copy(
         insert=[
+            Ref("AlterOwnerStatementSegment"),
             Ref("AlterConnectionRotateKeys"),
+            Ref("AlterDefaultPrivilegesStatementSegment"),
             Ref("AlterIndexStatementSegment"),
             Ref("AlterRenameStatementSegment"),
             Ref("AlterSecretStatementSegment"),
+            Ref("AlterSetClusterStatementSegment"),
             Ref("AlterSourceSinkSizeStatementSegment"),
             Ref("CloseStatementSegment"),
             Ref("CopyToStatementSegment"),
@@ -58,10 +65,12 @@ class StatementSegment(ansi.StatementSegment):
             Ref("CreateSourceKafkaStatementSegment"),
             Ref("CreateSourceLoadGeneratorStatementSegment"),
             Ref("CreateSourcePostgresStatementSegment"),
+            Ref("CreateSourceWebhookStatementSegment"),
             Ref("CreateTypeStatementSegment"),
             Ref("CreateViewStatementSegment"),
             Ref("DropStatementSegment"),
             Ref("FetchStatementSegment"),
+            Ref("GrantStatementSegment"),
             Ref("MaterializeExplainStatementSegment"),
             Ref("ShowStatementSegment"),
             Ref("ShowCreateStatementSegment"),
@@ -116,7 +125,44 @@ materialize_dialect.add(
         "CLUSTER",
         Ref("ObjectReferenceSegment"),
     ),
+    Privileges=OneOf(
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "CREATE",
+        "USAGE",
+        "CREATEROLE",
+        "CREATEDB",
+        "CREATECLUSTER",
+        Sequence("ALL", Ref.keyword("PRIVILEGES", optional=True)),
+    ),
 )
+
+
+class AlterOwnerStatementSegment(BaseSegment):
+    """A `ALTER OWNER` statement."""
+
+    type = "alter_owner_statement"
+
+    match_grammar = Sequence(
+        "ALTER",
+        OneOf(
+            "CONNECTION",
+            "CLUSTER",
+            Sequence("CLUSTER", "REPLICA"),
+            "INDEX",
+            "SOURCE",
+            "SINK",
+            "VIEW",
+            Sequence("MATERIALIZED", "VIEW"),
+            "TABLE",
+            "SECRET",
+        ),
+        Ref("ObjectReferenceSegment"),
+        Sequence("OWNER", "TO"),
+        Ref("ObjectReferenceSegment"),
+    )
 
 
 class AlterConnectionRotateKeys(BaseSegment):
@@ -134,6 +180,43 @@ class AlterConnectionRotateKeys(BaseSegment):
     )
 
 
+class AlterDefaultPrivilegesStatementSegment(BaseSegment):
+    """A `ALTER DEFAULT PRIVILEGES` statement."""
+
+    type = "alter_default_privileges_statement"
+
+    match_grammar = Sequence(
+        Sequence("ALTER", "DEFAULT", "PRIVILEGES", "FOR"),
+        OneOf(
+            Sequence(
+                OneOf("ROLE", "USER"),
+                Ref("ObjectReferenceSegment"),
+            ),
+            Sequence("ALL", "ROLES"),
+        ),
+        Sequence(
+            "IN",
+            OneOf("SCHEMA", "DATABASE"),
+            Ref("ObjectReferenceSegment"),
+            optional=True,
+        ),
+        "GRANT",
+        Ref("Privileges"),
+        "ON",
+        OneOf(
+            "TABLES",
+            "TYPES",
+            "SECRETS",
+            "CONNECTIONS",
+            "DATABASES",
+            "SCHEMAS",
+            "CLUSTERS",
+        ),
+        "TO",
+        Ref("ObjectReferenceSegment"),
+    )
+
+
 class AlterRenameStatementSegment(BaseSegment):
     """A `ALTER RENAME` statement."""
 
@@ -143,6 +226,7 @@ class AlterRenameStatementSegment(BaseSegment):
         "ALTER",
         OneOf(
             "CONNECTION",
+            Sequence("CLUSTER", Ref.keyword("REPLICA", optional=True)),
             "INDEX",
             "SOURCE",
             "SINK",
@@ -182,6 +266,20 @@ class AlterSecretStatementSegment(BaseSegment):
         Ref("ObjectReferenceSegment"),
         "AS",
         Anything(),
+    )
+
+
+class AlterSetClusterStatementSegment(BaseSegment):
+    """A `ALTER SET CLUSTER` statement."""
+
+    type = "alter_set_cluster_statement"
+
+    match_grammar = Sequence(
+        Sequence("ALTER", "MATERIALIZED", "VIEW"),
+        Ref("IfExistsGrammar", optional=True),
+        Ref("ObjectReferenceSegment"),
+        Sequence("IN", "CLUSTER"),
+        Ref("ObjectReferenceSegment"),
     )
 
 
@@ -281,14 +379,20 @@ class CreateClusterStatementSegment(BaseSegment):
         "CREATE",
         "CLUSTER",
         Ref("ObjectReferenceSegment"),
-        Sequence(
-            "REPLICAS",
-            Bracketed(
-                Delimited(
-                    Anything(),
-                )
+        OneOf(
+            Sequence(
+                "REPLICAS",
+                Bracketed(
+                    Delimited(
+                        Anything(),
+                    )
+                ),
+                optional=True,
             ),
-            optional=True,
+            Sequence(
+                Anything(),
+                optional=True,
+            ),
         ),
     )
 
@@ -336,11 +440,7 @@ class CreateConnectionStatementSegment(BaseSegment):
                 "TUNNEL",
             ),
         ),
-        Bracketed(
-            Delimited(
-                Anything(),
-            )
-        ),
+        Bracketed(Anything()),
     )
 
 
@@ -448,6 +548,7 @@ class CreateSinkKafkaStatementSegment(BaseSegment):
         "SINK",
         Ref("IfNotExistsGrammar", optional=True),
         Ref("ObjectReferenceSegment"),
+        Ref("InCluster", optional=True),
         "FROM",
         Ref("ObjectReferenceSegment"),
         "INTO",
@@ -495,6 +596,7 @@ class CreateSourceKafkaStatementSegment(BaseSegment):
         "SOURCE",
         Ref("IfNotExistsGrammar", optional=True),
         Ref("ObjectReferenceSegment"),
+        Ref("InCluster", optional=True),
         Bracketed(
             Delimited(
                 Ref("ColumnReferenceSegment"),
@@ -561,6 +663,7 @@ class CreateSourceLoadGeneratorStatementSegment(BaseSegment):
         "SOURCE",
         Ref("IfNotExistsGrammar", optional=True),
         Ref("ObjectReferenceSegment"),
+        Ref("InCluster", optional=True),
         Sequence(
             "FROM",
             "LOAD",
@@ -569,6 +672,7 @@ class CreateSourceLoadGeneratorStatementSegment(BaseSegment):
         OneOf(
             "AUCTION",
             "COUNTER",
+            "MARKETING",
             "TPCH",
         ),
         Bracketed(
@@ -577,21 +681,10 @@ class CreateSourceLoadGeneratorStatementSegment(BaseSegment):
             ),
             optional=True,
         ),
-        OneOf(
-            Sequence(
-                "FOR",
-                "ALL",
-                "TABLES",
-            ),
-            Sequence(
-                "FOR",
-                "TABLES",
-                Bracketed(
-                    Delimited(
-                        Anything(),
-                    )
-                ),
-            ),
+        Sequence(
+            "FOR",
+            "ALL",
+            "TABLES",
             optional=True,
         ),
         Sequence(
@@ -615,6 +708,7 @@ class CreateSourcePostgresStatementSegment(BaseSegment):
         "SOURCE",
         Ref("IfNotExistsGrammar", optional=True),
         Ref("ObjectReferenceSegment"),
+        Ref("InCluster", optional=True),
         Sequence(
             "FROM",
             "POSTGRES",
@@ -651,6 +745,66 @@ class CreateSourcePostgresStatementSegment(BaseSegment):
                     Anything(),
                 )
             ),
+            optional=True,
+        ),
+    )
+
+
+class CreateSourceWebhookStatementSegment(BaseSegment):
+    """A `CREATE SOURCE WEBHOOK` statement."""
+
+    type = "create_source_load_generator_statement"
+    match_grammar = Sequence(
+        "CREATE",
+        "SOURCE",
+        Ref("IfNotExistsGrammar", optional=True),
+        Ref("ObjectReferenceSegment"),
+        Ref("InCluster", optional=True),
+        Sequence(
+            "FROM",
+            "WEBHOOK",
+            "BODY",
+            "FORMAT",
+        ),
+        OneOf(
+            "TEXT",
+            "JSON",
+            "BYTES",
+        ),
+        OneOf(
+            Sequence(
+                "INCLUDE",
+                "HEADER",
+                Sequence(
+                    Anything(),
+                    optional=True,
+                ),
+            ),
+            Sequence(
+                "INCLUDE",
+                "HEADERS",
+                Bracketed(
+                    Delimited(
+                        Anything(),
+                    )
+                ),
+            ),
+            optional=True,
+        ),
+        Sequence(
+            "CHECK",
+            Bracketed(
+                "WITH",
+                Bracketed(
+                    Delimited(
+                        Anything(),
+                    )
+                ),
+            ),
+            optional=True,
+        ),
+        Sequence(
+            Anything(),
             optional=True,
         ),
     )
@@ -969,6 +1123,69 @@ class FetchStatementSegment(BaseSegment):
                 )
             ),
             optional=True,
+        ),
+    )
+
+
+class GrantStatementSegment(BaseSegment):
+    """A `GRANT` statement."""
+
+    type = "grant_statement"
+    match_grammar = Sequence(
+        "GRANT",
+        Ref("Privileges"),
+        "ON",
+        OneOf(
+            Sequence(
+                OneOf(
+                    "TABLE",
+                    "TYPE",
+                    "SECRET",
+                    "CONNECTION",
+                    "DATABASE",
+                    "SCHEMA",
+                    "CLUSTER",
+                    optional=True,
+                ),
+                Delimited(
+                    Ref("ObjectReferenceSegment"),
+                ),
+            ),
+            "SYSTEM",
+            Sequence(
+                "ALL",
+                OneOf(
+                    Sequence(
+                        OneOf(
+                            "TABLES",
+                            "TYPES",
+                            "SECRETS",
+                            "CONNECTIONS",
+                        ),
+                        "IN",
+                        "SCHEMA",
+                        Delimited(
+                            Ref("ObjectReferenceSegment"),
+                        ),
+                    ),
+                    Sequence(
+                        OneOf("TABLES", "TYPES", "SECRETS", "CONNECTIONS", "SCHEMAS"),
+                        "IN",
+                        "DATABASE",
+                        Delimited(
+                            Ref("ObjectReferenceSegment"),
+                        ),
+                    ),
+                    "DATABASES",
+                    "SCHEMAS",
+                    "CLUSTERS",
+                ),
+            ),
+        ),
+        "TO",
+        Sequence("GROUP", optional=True),
+        Delimited(
+            Ref("ObjectReferenceSegment"),
         ),
     )
 

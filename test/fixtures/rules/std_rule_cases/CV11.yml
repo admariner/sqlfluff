@@ -246,9 +246,15 @@ test_fail_inconsistent_type_casting_3_arguments_convert_when_config_cast:
   - code: CV11
     description: Used type casting style is different from the preferred type
                  casting style.
-    line_no: 2
-    line_pos: 5
     name: "convention.casting_style"
+    warning: false
+    fixes: []
+    start_line_no: 2
+    start_line_pos: 5
+    start_file_pos: 11
+    end_line_no: 2
+    end_line_pos: 25
+    end_file_pos: 31
   configs:
     rules:
       convention.casting_style:
@@ -307,9 +313,16 @@ test_fail_inconsistent_type_casting_3_arguments_convert_when_config_shorthand:
   - code: CV11
     description: Used type casting style is different from the preferred type
                  casting style.
-    line_no: 2
-    line_pos: 5
     name: "convention.casting_style"
+    warning: false
+    fixes: []
+    start_line_no: 2
+    start_line_pos: 5
+    start_file_pos: 11
+    end_line_no: 2
+    end_line_pos: 25
+    end_file_pos: 31
+
   configs:
     rules:
       convention.casting_style:
@@ -322,7 +335,6 @@ test_pass_when_dialect_is_teradata:
   configs:
     core:
       dialect: teradata
-
 
 test_fail_parenthesize_expression_when_config_shorthand_from_cast:
   fail_str: |
@@ -340,7 +352,6 @@ test_fail_parenthesize_expression_when_config_shorthand_from_cast:
       convention.casting_style:
         preferred_type_casting_style: shorthand
 
-
 test_fail_parenthesize_expression_when_config_shorthand_from_convert:
   fail_str: |
     select
@@ -356,3 +367,32 @@ test_fail_parenthesize_expression_when_config_shorthand_from_convert:
     rules:
       convention.casting_style:
         preferred_type_casting_style: shorthand
+
+test_fail_snowflake_semi_structured_cast_4453:
+  # https://github.com/sqlfluff/sqlfluff/issues/4453
+  fail_str: |
+    select (trim(value:Longitude::varchar))::double as longitude;
+    select col:a.b:c::varchar as bar;
+  fix_str: |
+    select cast((trim(cast(value:Longitude as varchar))) as double) as longitude;
+    select cast(col:a.b:c as varchar) as bar;
+  configs:
+    core:
+      dialect: snowflake
+    rules:
+      convention.casting_style:
+        preferred_type_casting_style: cast
+
+test_pass_macro_cast:
+  # If a cast is in a templated section, it shouldn't
+  # mean the ones in the file are inconsistent.
+  pass_str: |
+    {% macro cast_macro(col) %}
+        CAST(col as int)
+    {% endmacro %}
+
+    select
+        a,
+        {{ cast_macro('b') }},
+        c::date as d
+    from tbl

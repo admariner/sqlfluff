@@ -1,9 +1,14 @@
 """Implementation of Rule RF02."""
-import regex
-from typing import List, Optional
 
-from sqlfluff.core.rules import LintResult
+from typing import List, Optional, Set
+
+import regex
+
+from sqlfluff.core.dialects.common import AliasInfo, ColumnAliasInfo
+from sqlfluff.core.parser import BaseSegment
+from sqlfluff.core.rules import LintResult, RuleContext
 from sqlfluff.rules.aliasing.AL04 import Rule_AL04
+from sqlfluff.utils.analysis.select import get_select_statement_info
 
 
 class Rule_RF02(Rule_AL04):
@@ -41,15 +46,35 @@ class Rule_RF02(Rule_AL04):
 
     def _lint_references_and_aliases(
         self,
-        table_aliases,
-        standalone_aliases,
+        table_aliases: List[AliasInfo],
+        standalone_aliases: List[BaseSegment],
         references,
-        col_aliases,
-        using_cols,
-        parent_select,
+        col_aliases: List[ColumnAliasInfo],
+        using_cols: List[BaseSegment],
+        parent_select: Optional[BaseSegment],
+        rule_context: RuleContext,
     ) -> Optional[List[LintResult]]:
         # Config type hints
         self.ignore_words_regex: str
+
+        if parent_select:
+            parent_select_info = get_select_statement_info(
+                parent_select, rule_context.dialect
+            )
+            if parent_select_info:
+                # If we are looking at a subquery, include any table references
+                for table_alias in parent_select_info.table_aliases:
+                    is_from = self._is_root_from_clause(rule_context)
+                    if (
+                        table_alias.from_expression_element.path_to(
+                            rule_context.segment
+                        )
+                        or is_from
+                    ):
+                        # Skip the subquery alias itself or if the subquery is inside
+                        # of a `from` or `join`` clause that isn't a nested where clause
+                        continue
+                    table_aliases.append(table_alias)
 
         # Do we have more than one? If so, all references should be qualified.
         if len(table_aliases) <= 1:
@@ -63,12 +88,18 @@ class Rule_RF02(Rule_AL04):
             # very slow.
             ignore_words_list = self._init_ignore_words_list()
 
+        sql_variables = self._find_sql_variables(rule_context)
+
         # A buffer to keep any violations.
         violation_buff = []
         # Check all the references that we have.
         for r in references:
             # Skip if in ignore list
             if ignore_words_list and r.raw.lower() in ignore_words_list:
+                continue
+
+            # Skip if a sql variable name inside the file
+            if r.raw.lower() in sql_variables:
                 continue
 
             # Skip if matches ignore regex
@@ -90,10 +121,10 @@ class Rule_RF02(Rule_AL04):
                 # in a different select clause element.
                 and r.raw not in col_alias_names
                 # Allow columns defined in a USING expression.
-                and r.raw not in using_cols
+                and r.raw not in [using_col.raw for using_col in using_cols]
                 # Allow columns defined as standalone aliases
                 # (e.g. value table functions from bigquery)
-                and r.raw not in standalone_aliases
+                and r.raw not in [a.raw for a in standalone_aliases]
             ):
                 violation_buff.append(
                     LintResult(
@@ -104,6 +135,21 @@ class Rule_RF02(Rule_AL04):
                 )
 
         return violation_buff or None
+
+    def _is_root_from_clause(self, rule_context: RuleContext) -> bool:
+        """This is to determine if a subquery is part of the from clause.
+
+        Any subqueries in the `from_clause` should be ignore, unless they are a nested
+        correlated query.
+        """
+        is_from = False
+        for x in reversed(rule_context.parent_stack):
+            if x.is_type("from_clause"):
+                is_from = True
+                break
+            elif x.is_type("where_clause"):
+                break
+        return is_from
 
     def _init_ignore_words_list(self) -> List[str]:
         """Called first time rule is evaluated to fetch & cache the policy."""
@@ -116,3 +162,26 @@ class Rule_RF02(Rule_AL04):
             self.ignore_words_list = []
 
         return self.ignore_words_list
+
+    def _find_sql_variables(self, rule_context: RuleContext) -> Set[str]:
+        """Get any `DECLARE`d variables in the whole of the linted file.
+
+        This assumes that the declare statement is going to be used before any reference
+        """
+        sql_variables: Set[str] = set()
+
+        # Check for bigquery declared variables. These may only exists at the top of
+        # the file or at the beginning of a `BEGIN` block. The risk of collision
+        # _should_ be low and no `IF` chain searching should be required.
+        if rule_context.dialect.name == "bigquery":
+            sql_variables |= {
+                identifier.raw.lower()
+                for declare in rule_context.parent_stack[0].recursive_crawl(
+                    "declare_segment"
+                )
+                for identifier in declare.get_children("identifier")
+            }
+
+        # TODO: Add any additional dialect specific variable names
+
+        return sql_variables

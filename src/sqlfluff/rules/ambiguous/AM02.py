@@ -1,10 +1,11 @@
 """Implementation of Rule AM02."""
-from typing import Tuple
-from sqlfluff.core.parser import (
-    WhitespaceSegment,
-    KeywordSegment,
-)
 
+from typing import Tuple
+
+from sqlfluff.core.parser import (
+    KeywordSegment,
+    WhitespaceSegment,
+)
 from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
 
@@ -14,7 +15,9 @@ class Rule_AM02(BaseRule):
 
     .. note::
        This rule is only enabled for dialects that support ``UNION`` and
-       ``UNION DISTINCT`` (``ansi``, ``hive``, ``mysql``, and ``redshift``).
+       ``UNION DISTINCT`` (``ansi``, ``bigquery``, ``clickhouse``,
+       ``databricks``, ``db2``, ``hive``, ``mysql``, ``redshift``,
+       ``snowflake``, and ``trino``).
 
     **Anti-pattern**
 
@@ -44,6 +47,7 @@ class Rule_AM02(BaseRule):
     aliases = ("L033",)
     groups: Tuple[str, ...] = ("all", "core", "ambiguous")
     crawl_behaviour = SegmentSeekerCrawler({"set_operator"})
+    is_fix_compatible = True
 
     def _eval(self, context: RuleContext) -> LintResult:
         """Look for UNION keyword not immediately followed by DISTINCT or ALL.
@@ -57,9 +61,15 @@ class Rule_AM02(BaseRule):
         """
         if context.dialect.name not in [
             "ansi",
+            "bigquery",
+            "clickhouse",
+            "databricks",
+            "db2",
             "hive",
             "mysql",
             "redshift",
+            "snowflake",
+            "trino",
         ]:
             return LintResult()
 

@@ -1,58 +1,51 @@
-"""Defines the templaters."""
+"""Defines the dbt templater.
 
-from collections import deque
-from contextlib import contextmanager
+NOTE: The dbt python package adds a significant overhead to import.
+This module is also loaded on every run of SQLFluff regardless of
+whether the dbt templater is selected in the configuration.
+
+The templater is however only _instantiated_ when selected, and as
+such, all imports of the dbt libraries are contained within the
+DbtTemplater class and so are only imported when necessary.
+"""
+
+import logging
 import os
 import os.path
-import logging
-from typing import List, Optional, Iterator, Tuple, Any, Dict, Deque
-
+from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import cached_property
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Deque,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 
-from dbt.version import get_installed_version
-from dbt.config import read_user_config
-from dbt.config.runtime import RuntimeConfig as DbtRuntimeConfig
-from dbt.adapters.factory import register_adapter, get_adapter
-from dbt.compilation import Compiler as DbtCompiler
-
-try:
-    from dbt.exceptions import (
-        CompilationException as DbtCompilationException,
-        FailedToConnectException as DbtFailedToConnectException,
-    )
-except ImportError:
-    from dbt.exceptions import (
-        CompilationError as DbtCompilationException,
-        FailedToConnectError as DbtFailedToConnectException,
-    )
-
-from dbt import flags
 from jinja2 import Environment
 from jinja2_simple_tags import StandaloneTag
 
-from sqlfluff.cli.formatters import OutputStreamFormatter
-from sqlfluff.core import FluffConfig
-from sqlfluff.core.cached_property import cached_property
-from sqlfluff.core.errors import SQLTemplaterError, SQLFluffSkipFile
-
+from sqlfluff.core.errors import SQLFluffSkipFile, SQLFluffUserError, SQLTemplaterError
 from sqlfluff.core.templaters.base import TemplatedFile, large_file_check
-
 from sqlfluff.core.templaters.jinja import JinjaTemplater
+
+if TYPE_CHECKING:  # pragma: no cover
+    from dbt.semver import VersionSpecifier
+
+    from sqlfluff.cli.formatters import OutputStreamFormatter
+    from sqlfluff.core import FluffConfig
 
 # Instantiate the templater logger
 templater_logger = logging.getLogger("sqlfluff.templater")
-
-
-DBT_VERSION = get_installed_version()
-DBT_VERSION_STRING = DBT_VERSION.to_version_string()
-DBT_VERSION_TUPLE = (int(DBT_VERSION.major), int(DBT_VERSION.minor))
-
-if DBT_VERSION_TUPLE >= (1, 3):
-    COMPILED_SQL_ATTRIBUTE = "compiled_code"
-    RAW_SQL_ATTRIBUTE = "raw_code"
-else:  # pragma: no cover
-    COMPILED_SQL_ATTRIBUTE = "compiled_sql"
-    RAW_SQL_ATTRIBUTE = "raw_sql"
 
 
 @dataclass
@@ -63,8 +56,118 @@ class DbtConfigArgs:
     profiles_dir: Optional[str] = None
     profile: Optional[str] = None
     target: Optional[str] = None
+    target_path: Optional[str] = None
+    threads: int = 1
     single_threaded: bool = False
-    vars: str = ""
+    # dict in 1.5.x onwards, json string before.
+    # NOTE: We always set this value when instantiating this
+    # class. If we rely on defaults, this should default to
+    # an empty string pre 1.5.x
+    vars: Optional[Union[Dict, str]] = None
+    # NOTE: The `which` argument here isn't covered in tests, but many
+    # dbt packages assume that it will have been set.
+    # https://github.com/sqlfluff/sqlfluff/issues/4861
+    # https://github.com/sqlfluff/sqlfluff/issues/4965
+    which: Optional[str] = "compile"
+    # NOTE: As of dbt 1.8, the following is required to exist.
+    REQUIRE_RESOURCE_NAMES_WITHOUT_SPACES: Optional[bool] = None
+
+
+def is_dbt_exception(exception: Optional[BaseException]) -> bool:
+    """Check whether this looks like a dbt exception."""
+    # None is not a dbt exception.
+    if not exception:
+        return False
+    return exception.__class__.__module__.startswith("dbt")
+
+
+def _extract_error_detail(exception: BaseException) -> str:
+    """Serialise an exception into a string for reuse in other messages."""
+    return (
+        f"{exception.__class__.__module__}.{exception.__class__.__name__}: {exception}"
+    )
+
+
+T = TypeVar("T")
+
+
+def handle_dbt_errors(
+    error_class: Type[Exception], preamble: str
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """A decorator to safely catch dbt exceptions and raise native ones.
+
+    NOTE: This looks and behaves a lot like a context manager, but it's
+    important that it is *not* a context manager so that it can effectively
+    strip the context from handled exceptions. That isn't possible (as far
+    as we've tried) within a context manager.
+
+    dbt exceptions don't pickle nicely, and python exception context tries
+    very hard to make sure that the exception context of any new exceptions
+    is preserved. This means we have to be quite deliberate in stripping any
+    dbt exceptions, not just those that are directly raised, but those which
+    are present within the `__context__` or `__cause__` attributes of any
+    SQLFluff exceptions.
+
+    This wrapper aims to do that, catching any dbt exceptions and
+    raising SQLFluff exceptions, and also making sure that any native
+    SQLFluff exceptions which are handled are also stripped of any
+    unwanted dbt exceptions so that we don't cause issues when in
+    multithreaded/multiprocess operation.
+
+    https://docs.python.org/3/library/exceptions.html#inheriting-from-built-in-exceptions
+    https://github.com/sqlfluff/sqlfluff/issues/6037
+    """  # noqa E501
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        def wrapped_method(*args, **kwargs) -> T:
+            # NOTE: `_detail` also acts as a flag to indicate whether an exception
+            # has been raised that we should react to.
+            _detail = ""
+            try:
+                result = func(*args, **kwargs)
+                return result
+            # If we handle any other exception, check for dbt exceptions. We check using
+            # string matching rather than importing the exceptions because the dbt folks
+            # keep changing the names, and we don't really care which one it is, only
+            # whether it's a dbt exception. None of them pickle nicely.
+            except Exception as err:
+                if is_dbt_exception(err):
+                    _detail = _extract_error_detail(err)
+                else:
+                    # Any other errors are re-raised but only after stripping any
+                    # dbt context errors they may have acquired. This includes any
+                    # native SQLFluff errors.
+                    if is_dbt_exception(err.__context__):
+                        err.__context__ = None
+                    if is_dbt_exception(err.__cause__):  # pragma: no cover
+                        # This one seems to be less of an issue in testing, but I'm
+                        # keeping it in for completeness.
+                        err.__cause__ = None
+                    raise err
+            # By raising the new exception outside of the try/except clause we prevent
+            # the link between the new and old exceptions. Otherwise the old one is
+            # likely included in the __context__ attribute of the new one.
+            # Unfortunately the dbt exceptions do not pickle well, so if they were
+            # raised here then they cause all kinds of threading errors during parallel
+            # linting. Python really doesn't likely you trying to remove the `__cause__`
+            # attribute of an exception so this is a mini-hack to sidestep that
+            # behaviour.
+
+            # Connection errors are handled more specifically (because they're fatal)
+            if "FailedToConnect" in _detail:
+                raise SQLTemplaterError(
+                    "dbt tried to connect to the database and failed. Consider "
+                    + "running  `dbt debug` or `dbt compile` to get more "
+                    + "information from dbt. "
+                    + _detail,
+                    fatal=True,
+                )
+            # Other errors will use the preamble given to the decorator.
+            raise error_class(preamble + _detail)
+
+        return wrapped_method
+
+    return decorator
 
 
 class DbtTemplater(JinjaTemplater):
@@ -74,62 +177,152 @@ class DbtTemplater(JinjaTemplater):
     sequential_fail_limit = 3
     adapters = {}
 
-    def __init__(self, **kwargs):
+    def __init__(self, override_context: Optional[Dict[str, Any]] = None):
         self.sqlfluff_config = None
         self.formatter = None
         self.project_dir = None
         self.profiles_dir = None
         self.working_dir = os.getcwd()
-        self._sequential_fails = 0
-        super().__init__(**kwargs)
+        super().__init__(override_context=override_context)
 
-    def config_pairs(self):  # pragma: no cover TODO?
+    def config_pairs(self):
         """Returns info about the given templater for output by the cli."""
         return [("templater", self.name), ("dbt", self.dbt_version)]
 
-    @property
-    def dbt_version(self):  # pragma: no cover
+    @cached_property
+    def _dbt_version(self) -> "VersionSpecifier":
+        """Fetches the installed dbt version.
+
+        This is cached in the raw dbt format.
+
+        NOTE: We do this only on demand to reduce the amount of loading
+        required to discover the templater.
+        """
+        from dbt.version import get_installed_version
+
+        return get_installed_version()
+
+    @cached_property
+    def dbt_version(self):
         """Gets the dbt version."""
-        return DBT_VERSION_STRING
+        return self._dbt_version.to_version_string()
+
+    @cached_property
+    def dbt_version_tuple(self):
+        """Gets the dbt version."""
+        return int(self._dbt_version.major), int(self._dbt_version.minor)
+
+    def try_silence_dbt_logs(self) -> None:
+        """Attempt to silence dbt logs.
+
+        During normal operation dbt is likely to log output such as:
+
+        .. code-block::
+
+           14:13:10  Registered adapter: snowflake=1.6.0
+
+        This is emitted by dbt directly to stdout/stderr, and so for us
+        to silence it (e.g. when outputting to json or yaml) we need to
+        reach into the internals of dbt and silence it directly.
+
+        https://github.com/sqlfluff/sqlfluff/issues/5054
+
+        NOTE: We wrap this in a try clause so that if the API changes
+        within dbt that we don't get a direct fail. This was tested on
+        dbt-code==1.6.0.
+        """
+        # First check whether we need to silence the logs. If a formatter
+        # is present then assume that it's not a problem
+        if not self.formatter:
+            if self.dbt_version_tuple >= (1, 8):
+                from dbt_common.events.event_manager_client import (
+                    cleanup_event_logger,
+                )
+
+            else:
+                from dbt.events.functions import cleanup_event_logger
+
+            cleanup_event_logger()
 
     @cached_property
     def dbt_config(self):
         """Loads the dbt config."""
-        # Here, we read flags.PROFILE_DIR directly, prior to calling
-        # set_from_args(). Apparently, set_from_args() sets PROFILES_DIR
-        # to a lowercase version of the value, and the profile wouldn't be
-        # found if the directory name contained uppercase letters. This fix
-        # was suggested and described here:
-        # https://github.com/sqlfluff/sqlfluff/issues/2253#issuecomment-1018722979
-        user_config = read_user_config(flags.PROFILES_DIR)
+        from dbt import flags
+        from dbt.adapters.factory import register_adapter
+        from dbt.config.runtime import RuntimeConfig as DbtRuntimeConfig
+
+        if self.dbt_version_tuple >= (1, 8):
+            from dbt_common.clients.system import get_env
+            from dbt_common.context import set_invocation_context
+
+            set_invocation_context(get_env())
+
+        # Attempt to silence internal logging at this point.
+        # https://github.com/sqlfluff/sqlfluff/issues/5054
+        self.try_silence_dbt_logs()
+
+        if self.dbt_version_tuple >= (1, 5):
+            user_config = None
+            # 1.5.x+ this is a dict.
+            cli_vars = self._get_cli_vars()
+        else:
+            # Here, we read flags.PROFILE_DIR directly, prior to calling
+            # set_from_args(). Apparently, set_from_args() sets PROFILES_DIR
+            # to a lowercase version of the value, and the profile wouldn't be
+            # found if the directory name contained uppercase letters. This fix
+            # was suggested and described here:
+            # https://github.com/sqlfluff/sqlfluff/issues/2253#issuecomment-1018722979
+            from dbt.config import read_user_config
+
+            user_config = read_user_config(flags.PROFILES_DIR)
+            # Pre 1.5.x this is a string.
+            cli_vars = str(self._get_cli_vars())
+
         flags.set_from_args(
             DbtConfigArgs(
                 project_dir=self.project_dir,
                 profiles_dir=self.profiles_dir,
                 profile=self._get_profile(),
-                vars=self._get_cli_vars(),
+                target_path=self._get_target_path(),
+                vars=cli_vars,
+                threads=1,
             ),
             user_config,
         )
-        self.dbt_config = DbtRuntimeConfig.from_args(
+        _dbt_config = DbtRuntimeConfig.from_args(
             DbtConfigArgs(
                 project_dir=self.project_dir,
                 profiles_dir=self.profiles_dir,
                 profile=self._get_profile(),
                 target=self._get_target(),
-                vars=self._get_cli_vars(),
+                target_path=self._get_target_path(),
+                vars=cli_vars,
+                threads=1,
             )
         )
-        register_adapter(self.dbt_config)
-        return self.dbt_config
+
+        if self.dbt_version_tuple >= (1, 8):
+            from dbt.mp_context import get_mp_context
+
+            register_adapter(_dbt_config, get_mp_context())
+        else:
+            register_adapter(_dbt_config)
+
+        return _dbt_config
 
     @cached_property
     def dbt_compiler(self):
         """Loads the dbt compiler."""
-        self.dbt_compiler = DbtCompiler(self.dbt_config)
-        return self.dbt_compiler
+        from dbt.compilation import Compiler as DbtCompiler
+
+        return DbtCompiler(self.dbt_config)
 
     @cached_property
+    @handle_dbt_errors(
+        SQLFluffUserError,
+        "dbt failed during project compilation. Consider  running  `dbt debug` "
+        "or `dbt compile` to get more information from dbt. ",
+    )
     def dbt_manifest(self):
         """Loads the dbt manifest."""
         # Set dbt not to run tracking. We don't load
@@ -142,16 +335,7 @@ class DbtTemplater(JinjaTemplater):
         # dbt 0.20.* and onward
         from dbt.parser.manifest import ManifestLoader
 
-        old_cwd = os.getcwd()
-        try:
-            # Changing cwd temporarily as dbt is not using project_dir to
-            # read/write `target/partial_parse.msgpack`. This can be undone when
-            # https://github.com/dbt-labs/dbt-core/issues/6055 is solved.
-            os.chdir(self.project_dir)
-            self.dbt_manifest = ManifestLoader.get_full_manifest(self.dbt_config)
-        finally:
-            os.chdir(old_cwd)
-        return self.dbt_manifest
+        return ManifestLoader.get_full_manifest(self.dbt_config)
 
     @cached_property
     def dbt_selector_method(self):
@@ -163,13 +347,15 @@ class DbtTemplater(JinjaTemplater):
 
         from dbt.graph.selector_methods import (
             MethodManager as DbtSelectorMethodManager,
+        )
+        from dbt.graph.selector_methods import (
             MethodName as DbtMethodName,
         )
 
         selector_methods_manager = DbtSelectorMethodManager(
             self.dbt_manifest, previous_state=None
         )
-        self.dbt_selector_method = selector_methods_manager.get_method(
+        _dbt_selector_method = selector_methods_manager.get_method(
             DbtMethodName.Path, method_arguments=[]
         )
 
@@ -178,23 +364,36 @@ class DbtTemplater(JinjaTemplater):
                 "dbt templater", "Project Compiled."
             )
 
-        return self.dbt_selector_method
+        return _dbt_selector_method
 
     def _get_profiles_dir(self):
         """Get the dbt profiles directory from the configuration.
 
-        The default is `~/.dbt` in 0.17 but we use the
-        PROFILES_DIR variable from the dbt library to
+        The default is `~/.dbt` but we use the
+        default_profiles_dir from the dbt library to
         support a change of default in the future, as well
         as to support the same overwriting mechanism as
         dbt (currently an environment variable).
         """
+        # Where default_profiles_dir is available, use it. For dbt 1.2 and
+        # earlier, it is not, so fall back to the flags option which should
+        # still be available in those versions.
+
+        from dbt import flags
+        from dbt.cli.resolvers import default_profiles_dir
+
+        default_dir = (
+            default_profiles_dir()
+            if default_profiles_dir is not None
+            else flags.PROFILES_DIR
+        )
+
         dbt_profiles_dir = os.path.abspath(
             os.path.expanduser(
                 self.sqlfluff_config.get_section(
                     (self.templater_selector, self.name, "profiles_dir")
                 )
-                or flags.PROFILES_DIR
+                or (os.getenv("DBT_PROFILES_DIR") or default_dir)
             )
         )
 
@@ -239,12 +438,18 @@ class DbtTemplater(JinjaTemplater):
             (self.templater_selector, self.name, "target")
         )
 
-    def _get_cli_vars(self) -> str:
+    def _get_target_path(self):
+        """Get a dbt target path from the configuration."""
+        return self.sqlfluff_config.get_section(
+            (self.templater_selector, self.name, "target_path")
+        )
+
+    def _get_cli_vars(self) -> dict:
         cli_vars = self.sqlfluff_config.get_section(
             (self.templater_selector, self.name, "context")
         )
 
-        return str(cli_vars) if cli_vars else "{}"
+        return cli_vars if cli_vars else {}
 
     def sequence_files(
         self, fnames: List[str], config=None, formatter=None
@@ -322,14 +527,17 @@ class DbtTemplater(JinjaTemplater):
                 )
 
     @large_file_check
+    @handle_dbt_errors(
+        SQLTemplaterError, "Error received from dbt during project compilation. "
+    )
     def process(
         self,
         *,
         fname: str,
         in_str: Optional[str] = None,
-        config: Optional[FluffConfig] = None,
-        formatter: Optional[OutputStreamFormatter] = None,
-    ):
+        config: Optional["FluffConfig"] = None,
+        formatter: Optional["OutputStreamFormatter"] = None,
+    ) -> Tuple[TemplatedFile, List[SQLTemplaterError]]:
         """Compile a dbt model and return the compiled SQL.
 
         Args:
@@ -344,41 +552,13 @@ class DbtTemplater(JinjaTemplater):
         self.sqlfluff_config = config
         self.project_dir = self._get_project_dir()
         self.profiles_dir = self._get_profiles_dir()
-        fname_absolute_path = os.path.abspath(fname)
+        fname_absolute_path = os.path.abspath(fname) if fname != "stdin" else fname
 
+        # NOTE: dbt exceptions are caught and handled safely for pickling by the outer
+        # `handle_dbt_errors` decorator.
         try:
             os.chdir(self.project_dir)
-            processed_result = self._unsafe_process(fname_absolute_path, in_str, config)
-            # Reset the fail counter
-            self._sequential_fails = 0
-            return processed_result
-        except DbtCompilationException as e:
-            # Increment the counter
-            self._sequential_fails += 1
-            if e.node:
-                return None, [
-                    SQLTemplaterError(
-                        f"dbt compilation error on file '{e.node.original_file_path}', "
-                        f"{e.msg}",
-                        # It's fatal if we're over the limit
-                        fatal=self._sequential_fails > self.sequential_fail_limit,
-                    )
-                ]
-            else:
-                raise  # pragma: no cover
-        except DbtFailedToConnectException as e:
-            return None, [
-                SQLTemplaterError(
-                    "dbt tried to connect to the database and failed: you could use "
-                    "'execute' to skip the database calls. See"
-                    "https://docs.getdbt.com/reference/dbt-jinja-functions/execute/ "
-                    f"Error: {e.msg}",
-                    fatal=True,
-                )
-            ]
-        # If a SQLFluff error is raised, just pass it through
-        except SQLTemplaterError as e:  # pragma: no cover
-            return None, [e]
+            return self._unsafe_process(fname_absolute_path, in_str, config)
         finally:
             os.chdir(self.working_dir)
 
@@ -393,7 +573,7 @@ class DbtTemplater(JinjaTemplater):
                 "For the dbt templater, the `process()` method requires a file name"
             )
         elif fname == "stdin":  # pragma: no cover
-            raise ValueError(
+            raise SQLFluffUserError(
                 "The dbt templater does not support stdin input, provide a path instead"
             )
         selected = self.dbt_selector_method.search(
@@ -442,11 +622,20 @@ class DbtTemplater(JinjaTemplater):
         # turn is used by our parent class' (JinjaTemplater) slice_file()
         # function.
         old_from_string = Environment.from_string
-        make_template = None
+        # Start with render_func undefined. We need to know whether it has been
+        # overwritten.
+        render_func: Optional[Callable[[str], str]] = None
+
+        if self.dbt_version_tuple >= (1, 3):
+            compiled_sql_attribute = "compiled_code"
+            raw_sql_attribute = "raw_code"
+        else:  # pragma: no cover
+            compiled_sql_attribute = "compiled_sql"
+            raw_sql_attribute = "raw_sql"
 
         def from_string(*args, **kwargs):
             """Replaces (via monkeypatch) the jinja2.Environment function."""
-            nonlocal make_template
+            nonlocal render_func
             # Is it processing the node corresponding to fname?
             globals = kwargs.get("globals")
             if globals:
@@ -454,17 +643,40 @@ class DbtTemplater(JinjaTemplater):
                 if model:
                     if model.get("original_file_path") == original_file_path:
                         # Yes. Capture the important arguments and create
-                        # a make_template() function.
+                        # a render_func() closure with overwrites the variable
+                        # from within _unsafe_process when from_string is run.
                         env = args[0]
                         globals = args[2] if len(args) >= 3 else kwargs["globals"]
 
-                        def make_template(in_str):
+                        # Overwrite the outer render_func
+                        def render_func(in_str):
                             env.add_extension(SnapshotExtension)
-                            return env.from_string(in_str, globals=globals)
+                            template = env.from_string(in_str, globals=globals)
+                            if self.dbt_version_tuple >= (1, 8):
+                                # dbt 1.8 requires a context for rendering the template.
+                                return template.render(globals)
+                            return template.render()
 
             return old_from_string(*args, **kwargs)
 
+        # NOTE: We need to inject the project root here in reaction to the
+        # breaking change upstream with dbt. Coverage works in 1.5.2, but
+        # appears to no longer be covered in 1.5.3.
+        # This change was backported and so exists in some versions
+        # but not others. When not present, no additional action is needed.
+        # https://github.com/dbt-labs/dbt-core/pull/7949
+        # On the 1.5.x branch this was between 1.5.1 and 1.5.2
+        try:
+            from dbt.task.contextvars import cv_project_root
+
+            cv_project_root.set(self.project_dir)  # pragma: no cover
+        except ImportError:
+            cv_project_root = None
+
+        # NOTE: _find_node will raise a compilation exception if the project
+        # fails to compile, and we catch that in the outer `.process()` method.
         node = self._find_node(fname, config)
+
         templater_logger.debug(
             "_find_node for path %r returned object of type %s.", fname, type(node)
         )
@@ -475,6 +687,12 @@ class DbtTemplater(JinjaTemplater):
             if v.config.materialized == "ephemeral"
             and not getattr(v, "compiled", False)
         )
+
+        if self.dbt_version_tuple >= (1, 8):
+            from dbt_common.exceptions import UndefinedMacroError
+        else:
+            from dbt.exceptions import UndefinedMacroError
+
         with self.connection():
             # Apply the monkeypatch.
             Environment.from_string = from_string
@@ -483,20 +701,24 @@ class DbtTemplater(JinjaTemplater):
                     node=node,
                     manifest=self.dbt_manifest,
                 )
-            except Exception as err:  # pragma: no cover
-                templater_logger.exception(
-                    "Fatal dbt compilation error on %s. This occurs most often "
-                    "during incorrect sorting of ephemeral models before linting. "
-                    "Please report this error on github at "
-                    "https://github.com/sqlfluff/sqlfluff/issues, including "
-                    "both the raw and compiled sql for the model affected.",
-                    fname,
-                )
-                # Additional error logging in case we get a fatal dbt error.
-                raise SQLFluffSkipFile(  # pragma: no cover
+            except UndefinedMacroError as err:
+                # The explanation on the undefined macro error is already fairly
+                # explanatory, so just pass it straight through.
+                raise SQLTemplaterError(str(err))
+            except Exception as err:
+                # This happens if there's a fatal error at compile time. That
+                # can sometimes happen for SQLFluff related reasons (it used
+                # to happen if we tried to compile ephemeral models in the
+                # wrong order), but more often because a macro tries to query
+                # a table at compile time which doesn't exist.
+                raise SQLFluffSkipFile(
                     f"Skipped file {fname} because dbt raised a fatal "
                     f"exception during compilation: {err!s}"
-                ) from err
+                )
+                # NOTE: We don't do a `raise ... from err` here because the
+                # full trace is not useful for most users. In debugging
+                # issues here it may be valuable to add the `from err` part
+                # after the above `raise` statement.
             finally:
                 # Undo the monkeypatch.
                 Environment.from_string = old_from_string
@@ -507,9 +729,9 @@ class DbtTemplater(JinjaTemplater):
                 # However it's not always present.
                 compiled_sql = node.injected_sql  # pragma: no cover
             else:
-                compiled_sql = getattr(node, COMPILED_SQL_ATTRIBUTE)
+                compiled_sql = getattr(node, compiled_sql_attribute)
 
-            raw_sql = getattr(node, RAW_SQL_ATTRIBUTE)
+            raw_sql = getattr(node, raw_sql_attribute)
 
             if not compiled_sql:  # pragma: no cover
                 raise SQLTemplaterError(
@@ -556,8 +778,24 @@ class DbtTemplater(JinjaTemplater):
             #    3. Append the count from #1 above to compiled_sql. (In
             #       production, slice_file() does not usually use this string,
             #       but some test scenarios do.
-            setattr(node, RAW_SQL_ATTRIBUTE, source_dbt_sql)
-            compiled_sql = compiled_sql + "\n" * n_trailing_newlines
+            setattr(node, raw_sql_attribute, source_dbt_sql)
+
+            # So for files that have no templated elements in them, render_func
+            # will still be null at this point. If so, we replace it with a lambda
+            # which just directly returns the input , but _also_ reset the trailing
+            # newlines counter because they also won't have been stripped.
+            if render_func is None:
+                # NOTE: In this case, we shouldn't re-add newlines, because they
+                # were never taken away.
+                n_trailing_newlines = 0
+
+                # Overwrite the render_func placeholder.
+                def render_func(in_str):
+                    """A render function which just returns the input."""
+                    return in_str
+
+            # At this point assert that we _have_ a render_func
+            assert render_func is not None
 
             # TRICKY: dbt configures Jinja2 with keep_trailing_newline=False.
             # As documented (https://jinja.palletsprojects.com/en/3.0.x/api/),
@@ -568,9 +806,8 @@ class DbtTemplater(JinjaTemplater):
             # Below, we use "append_to_templated" to effectively "undo" this.
             raw_sliced, sliced_file, templated_sql = self.slice_file(
                 source_dbt_sql,
-                compiled_sql,
+                render_func=render_func,
                 config=config,
-                make_template=make_template,
                 append_to_templated="\n" if n_trailing_newlines else "",
             )
         # :HACK: If calling compile_node() compiled any ephemeral nodes,
@@ -597,6 +834,8 @@ class DbtTemplater(JinjaTemplater):
     @contextmanager
     def connection(self):
         """Context manager that manages a dbt connection, if needed."""
+        from dbt.adapters.factory import get_adapter
+
         # We have to register the connection in dbt >= 1.0.0 ourselves
         # In previous versions, we relied on the functionality removed in
         # https://github.com/dbt-labs/dbt-core/pull/4062.
@@ -605,7 +844,16 @@ class DbtTemplater(JinjaTemplater):
             adapter = get_adapter(self.dbt_config)
             self.adapters[self.project_dir] = adapter
             adapter.acquire_connection("master")
-            adapter.set_relations_cache(self.dbt_manifest)
+            if self.dbt_version_tuple >= (1, 8):
+                # See notes from https://github.com/dbt-labs/dbt-adapters/discussions/87
+                # about the decoupling of the adapters from core.
+                from dbt.context.providers import generate_runtime_macro_context
+
+                adapter.set_macro_resolver(self.dbt_manifest)
+                adapter.set_macro_context_generator(generate_runtime_macro_context)
+                adapter.set_relations_cache(self.dbt_manifest.nodes.values())
+            else:
+                adapter.set_relations_cache(self.dbt_manifest)
 
         yield
         # :TRICKY: Once connected, we never disconnect. Making multiple

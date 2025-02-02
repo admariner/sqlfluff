@@ -5,9 +5,10 @@ from typing import List, Optional, Tuple
 
 from sqlfluff.core.dialects.common import AliasInfo, ColumnAliasInfo
 from sqlfluff.core.parser import BaseSegment
-from sqlfluff.core.rules import BaseRule, LintResult, RuleContext, EvalResultType
-from sqlfluff.utils.analysis.select import get_select_statement_info
+from sqlfluff.core.rules import BaseRule, EvalResultType, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
+from sqlfluff.dialects.dialect_ansi import ObjectReferenceSegment
+from sqlfluff.utils.analysis.select import get_select_statement_info
 
 
 class Rule_AL04(BaseRule):
@@ -67,17 +68,32 @@ class Rule_AL04(BaseRule):
     def _lint_references_and_aliases(
         self,
         table_aliases: List[AliasInfo],
-        standalone_aliases: List[str],
-        references: List[BaseSegment],
+        standalone_aliases: List[BaseSegment],
+        references: List[ObjectReferenceSegment],
         col_aliases: List[ColumnAliasInfo],
-        using_cols: List[str],
+        using_cols: List[BaseSegment],
         parent_select: Optional[BaseSegment],
+        rule_context: RuleContext,
     ) -> Optional[List[LintResult]]:
         """Check whether any aliases are duplicates.
 
         NB: Subclasses of this error should override this function.
 
         """
+        if parent_select:
+            parent_select_info = get_select_statement_info(
+                parent_select, rule_context.dialect
+            )
+            if parent_select_info:
+                # If we are looking at a subquery, include any table references
+                for table_alias in parent_select_info.table_aliases:
+                    if table_alias.from_expression_element.path_to(
+                        rule_context.segment
+                    ):
+                        # Skip the subquery alias itself
+                        continue
+                    table_aliases.append(table_alias)
+
         # Are any of the aliases the same?
         duplicate = set()
         for a1, a2 in itertools.combinations(table_aliases, 2):
@@ -128,4 +144,5 @@ class Rule_AL04(BaseRule):
             select_info.col_aliases,
             select_info.using_cols,
             parent_select,
+            context,
         )

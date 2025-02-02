@@ -1,7 +1,8 @@
 """Implementation of Rule CV09."""
 
+from typing import List, Optional
+
 import regex
-from typing import Optional
 
 from sqlfluff.core.rules import BaseRule, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
@@ -101,7 +102,7 @@ class Rule_CV09(BaseRule):
 
         return None
 
-    def _init_blocked_words(self):
+    def _init_blocked_words(self) -> List[str]:
         """Called first time rule is evaluated to fetch & cache the blocked_words."""
         blocked_words_config = getattr(self, "blocked_words")
         if blocked_words_config:

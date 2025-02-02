@@ -1,191 +1,371 @@
 """Sequence and Bracketed Grammars."""
 
-from typing import Optional, List, Tuple, cast
+# NOTE: We rename the typing.Sequence here so it doesn't collide
+# with the grammar class that we're defining.
+from os import getenv
+from typing import Optional, Set, Tuple, Type, Union, cast
+from typing import Sequence as SequenceType
 
-from sqlfluff.core.errors import SQLParseError
-
-from sqlfluff.core.parser.segments import (
-    BaseSegment,
-    Indent,
-    Dedent,
-    allow_ephemeral,
-    BracketedSegment,
-    MetaSegment,
-)
-from sqlfluff.core.parser.helpers import trim_non_code_segments, check_still_complete
-from sqlfluff.core.parser.match_result import MatchResult
-from sqlfluff.core.parser.match_wrapper import match_wrapper
+from sqlfluff.core.helpers.slice import is_zero_slice
 from sqlfluff.core.parser.context import ParseContext
 from sqlfluff.core.parser.grammar.base import (
     BaseGrammar,
     cached_method_for_parse_context,
 )
 from sqlfluff.core.parser.grammar.conditional import Conditional
-from os import getenv
+from sqlfluff.core.parser.match_algorithms import (
+    resolve_bracket,
+    skip_start_index_forward_to_code,
+    skip_stop_index_backward_to_code,
+    trim_to_terminator,
+)
+from sqlfluff.core.parser.match_result import MatchResult
+from sqlfluff.core.parser.matchable import Matchable
+from sqlfluff.core.parser.segments import (
+    BaseSegment,
+    Indent,
+    MetaSegment,
+    TemplateSegment,
+    UnparsableSegment,
+)
+from sqlfluff.core.parser.types import ParseMode, SimpleHintType
+
+
+def _flush_metas(
+    pre_nc_idx: int,
+    post_nc_idx: int,
+    meta_buffer: SequenceType[Type["MetaSegment"]],
+    segments: SequenceType[BaseSegment],
+) -> Tuple[Tuple[int, Type[MetaSegment]], ...]:
+    """Position any new meta segments relative to the non code section.
+
+    It's important that we position the new meta segments appropriately
+    around any templated sections and any whitespace so that indentation
+    behaviour works as expected.
+
+    There are four valid locations (which may overlap).
+    1. Before any non-code
+    2. Before the first block templated section (if it's a block opener).
+    3. After the last block templated section (if it's a block closer).
+    4. After any non code.
+
+    If all the metas have a positive indent value then they should go in
+    position 1 or 3, otherwise we're in position 2 or 4. Within each of
+    those scenarios it depends on whether an appropriate block end exists.
+    """
+    if all(m.indent_val >= 0 for m in meta_buffer):
+        for _idx in range(post_nc_idx, pre_nc_idx, -1):
+            if segments[_idx - 1].is_type("placeholder"):
+                _seg = cast(TemplateSegment, segments[_idx - 1])
+                if _seg.block_type == "block_end":
+                    meta_idx = _idx
+                else:
+                    meta_idx = pre_nc_idx
+                break
+        else:
+            meta_idx = pre_nc_idx
+    else:
+        for _idx in range(pre_nc_idx, post_nc_idx):
+            if segments[_idx].is_type("placeholder"):
+                _seg = cast(TemplateSegment, segments[_idx])
+                if _seg.block_type == "block_start":
+                    meta_idx = _idx
+                else:
+                    meta_idx = post_nc_idx
+                break
+        else:
+            meta_idx = post_nc_idx
+    return tuple((meta_idx, meta) for meta in meta_buffer)
 
 
 class Sequence(BaseGrammar):
     """Match a specific sequence of elements."""
 
+    supported_parse_modes = {
+        ParseMode.STRICT,
+        ParseMode.GREEDY,
+        ParseMode.GREEDY_ONCE_STARTED,
+    }
     test_env = getenv("SQLFLUFF_TESTENV", "")
 
     @cached_method_for_parse_context
-    def simple(self, parse_context: ParseContext, crumbs=None) -> Optional[List[str]]:
+    def simple(
+        self, parse_context: ParseContext, crumbs: Optional[Tuple[str]] = None
+    ) -> SimpleHintType:
         """Does this matcher support a uppercase hash matching route?
 
         Sequence does provide this, as long as the *first* non-optional
         element does, *AND* and optional elements which preceded it also do.
         """
-        simple_buff = []
+        simple_raws: Set[str] = set()
+        simple_types: Set[str] = set()
         for opt in self._elements:
             simple = opt.simple(parse_context=parse_context, crumbs=crumbs)
             if not simple:
                 return None
-            simple_buff += simple
+            simple_raws.update(simple[0])
+            simple_types.update(simple[1])
 
             if not opt.is_optional():
                 # We found our first non-optional element!
-                return simple_buff
+                return frozenset(simple_raws), frozenset(simple_types)
         # If *all* elements are optional AND simple, I guess it's also simple.
-        return simple_buff
+        return frozenset(simple_raws), frozenset(simple_types)
 
-    @match_wrapper()
-    @allow_ephemeral
-    def match(self, segments, parse_context):
-        """Match a specific sequence of elements."""
-        if isinstance(segments, BaseSegment):
-            segments = tuple(segments)  # pragma: no cover TODO?
+    def match(
+        self,
+        segments: SequenceType["BaseSegment"],
+        idx: int,
+        parse_context: "ParseContext",
+    ) -> MatchResult:
+        """Match a specific sequence of elements.
 
-        matched_segments = MatchResult.from_empty()
-        unmatched_segments = segments
+        When returning incomplete matches in one of the greedy parse
+        modes, we don't return any new meta segments (whether from conditionals
+        or otherwise). This is because we meta segments (typically indents)
+        may only make sense in the context of a full sequence, as their
+        corresponding pair may be later (and yet unrendered).
 
-        # Buffers of uninstantiated meta segments.
-        meta_pre_nc = ()
-        meta_post_nc = ()
-        early_break = False
+        Partial matches should however still return the matched (mutated)
+        versions of any segments which _have_ been processed to provide
+        better feedback to the user.
+        """
+        start_idx = idx  # Where did we start
+        matched_idx = idx  # Where have we got to
+        max_idx = len(segments)  # What is the limit
+        insert_segments: Tuple[Tuple[int, Type[MetaSegment]], ...] = ()
+        child_matches: Tuple[MatchResult, ...] = ()
+        first_match = True
+        # Metas with a negative indent value come AFTER
+        # the whitespace. Positive or neutral come BEFORE.
+        # HOWEVER: If one is already there, we must preserve
+        # the order. This forced ordering is fine if there's
+        # a positive followed by a negative in the sequence,
+        # but if by design a positive arrives *after* a
+        # negative then we should insert it after the positive
+        # instead.
+        # https://github.com/sqlfluff/sqlfluff/issues/3836
+        meta_buffer = []
 
-        for idx, elem in enumerate(self._elements):
-            # Check for an early break.
-            if early_break:
-                break
+        if self.parse_mode == ParseMode.GREEDY:
+            # In the GREEDY mode, we first look ahead to find a terminator
+            # before matching any code.
+            max_idx = trim_to_terminator(
+                segments,
+                idx,
+                terminators=[*self.terminators, *parse_context.terminators],
+                parse_context=parse_context,
+            )
 
-            while True:
-                # Consume non-code if appropriate
-                if self.allow_gaps:
-                    pre_nc, mid_seg, post_nc = trim_non_code_segments(
-                        unmatched_segments
-                    )
-                else:
-                    pre_nc = ()
-                    mid_seg = unmatched_segments
-                    post_nc = ()
+        # Iterate elements
+        for elem in self._elements:
+            # 1. Handle any metas or conditionals.
+            # We do this first so that it's the same whether we've run
+            # out of segments or not.
+            # If it's a conditional, evaluate it.
+            # In both cases, we don't actually add them as inserts yet
+            # because their position will depend on what types we accrue.
+            if isinstance(elem, Conditional):
+                # A conditional grammar will only ever return insertions.
+                # If it's not enabled it returns an empty match.
+                # NOTE: No deeper match here, it seemed unnecessary.
+                _match = elem.match(segments, matched_idx, parse_context)
+                # Rather than taking them as a match at this location, we
+                # requeue them for addition later.
+                for _, submatch in _match.insert_segments:
+                    meta_buffer.append(submatch)
+                continue
+            # If it's a raw meta, just add it to our list.
+            elif isinstance(elem, type) and issubclass(elem, Indent):
+                meta_buffer.append(elem)
+                continue
 
-                # Is it an indent or dedent?
-                if elem.is_meta:
-                    # Elements with a negative indent value come AFTER
-                    # the whitespace. Positive or neutral come BEFORE.
-                    # HOWEVER: If one is already there, we must preserve
-                    # the order. This forced ordering is fine if there's
-                    # a positive followed by a negative in the sequence,
-                    # but if by design a positive arrives *after* a
-                    # negative then we should insert it after the positive
-                    # instead.
-                    # https://github.com/sqlfluff/sqlfluff/issues/3836
-                    if elem.indent_val >= 0 and not any(
-                        seg.indent_val < 1 for seg in meta_post_nc
-                    ):
-                        meta_pre_nc += (elem(),)
-                    else:
-                        meta_post_nc += (elem(),)
-                    break
+            # 2. Match Segments.
+            # At this point we know there are segments left to match
+            # on and that the current element isn't a meta or conditional.
+            _idx = matched_idx
+            # TODO: Need test cases to cover overmatching non code properly
+            # especially around optional elements.
+            if self.allow_gaps:
+                # First, if we're allowing gaps, consume any non-code.
+                # NOTE: This won't consume from the end of a sequence
+                # because this happens only in the run up to matching
+                # another element. This is as designed.
+                _idx = skip_start_index_forward_to_code(segments, matched_idx, max_idx)
 
-                # Is it a conditional? If so is it active
-                if isinstance(elem, Conditional) and not elem.is_enabled(parse_context):
-                    # If it's not active, skip it.
-                    break
+            # Have we prematurely run out of segments?
+            if _idx >= max_idx:
+                # If the current element is optional, carry on.
+                if elem.is_optional():
+                    continue
+                # Otherwise we have a problem. We've already consumed
+                # any metas, optionals and conditionals.
+                # This is a failed match because we couldn't complete
+                # the sequence.
 
-                if len(pre_nc + mid_seg + post_nc) == 0:
-                    # We've run our of sequence without matching everything.
-                    # Do only optional or meta elements remain?
-                    if all(
-                        e.is_optional() or e.is_meta or isinstance(e, Conditional)
-                        for e in self._elements[idx:]
-                    ):
-                        # then it's ok, and we can return what we've got so far.
-                        # No need to deal with anything left over because we're at the
-                        # end, unless it's a meta segment.
+                if (
+                    # In a strict mode, running out a segments to match
+                    # on means that we don't match anything.
+                    self.parse_mode == ParseMode.STRICT
+                    # If nothing has been matched _anyway_ then just bail out.
+                    or matched_idx == start_idx
+                ):
+                    return MatchResult.empty_at(idx)
 
-                        # We'll add those meta segments after any existing ones. So
-                        # the go on the meta_post_nc stack.
-                        for e in self._elements[idx:]:
-                            # If it's meta, instantiate it.
-                            if e.is_meta:
-                                meta_post_nc += (e(),)  # pragma: no cover TODO?
-                            # If it's conditional and it's enabled, match it.
-                            if isinstance(e, Conditional) and e.is_enabled(
-                                parse_context
-                            ):
-                                meta_match = e.match(tuple(), parse_context)
-                                if meta_match:
-                                    meta_post_nc += meta_match.matched_segments
-
-                        # Early break to exit via the happy match path.
-                        early_break = True
-                        break
-                    else:
-                        # we've got to the end of the sequence without matching all
-                        # required elements.
-                        return MatchResult.from_unmatched(segments)
-                else:
-                    # We've already dealt with potential whitespace above, so carry on
-                    # to matching
-                    with parse_context.deeper_match() as ctx:
-                        elem_match = elem.match(mid_seg, parse_context=ctx)
-
-                    if elem_match.has_match():
-                        # We're expecting mostly partial matches here, but complete
-                        # matches are possible. Don't be greedy with whitespace!
-                        matched_segments += (
-                            meta_pre_nc
-                            + pre_nc
-                            + meta_post_nc
-                            + elem_match.matched_segments
+                # On any of the other modes (GREEDY or GREEDY_ONCE_STARTED)
+                # we've effectively already claimed the segments, we've
+                # just failed to match. In which case it's unparsable.
+                insert_segments += tuple((matched_idx, meta) for meta in meta_buffer)
+                return MatchResult(
+                    matched_slice=slice(start_idx, matched_idx),
+                    insert_segments=insert_segments,
+                    child_matches=child_matches,
+                ).wrap(
+                    UnparsableSegment,
+                    segment_kwargs={
+                        "expected": (
+                            f"{elem} after {segments[matched_idx - 1]}. Found nothing."
                         )
-                        meta_pre_nc = ()
-                        meta_post_nc = ()
-                        unmatched_segments = elem_match.unmatched_segments + post_nc
-                        # Each time we do this, we do a sense check to make sure we
-                        # haven't dropped anything. (Because it's happened before!).
-                        if self.test_env:
-                            check_still_complete(
-                                segments,
-                                matched_segments.matched_segments,
-                                unmatched_segments,
-                            )
-                        # Break out of the while loop and move to the next element.
-                        break
-                    else:
-                        # If we can't match an element, we should ascertain whether it's
-                        # required. If so then fine, move on, but otherwise we should
-                        # crash out without a match. We have not matched the sequence.
-                        if elem.is_optional():
-                            # This will crash us out of the while loop and move us
-                            # onto the next matching element
-                            break
-                        else:
-                            return MatchResult.from_unmatched(segments)
+                    },
+                )
 
-        # If we get to here, we've matched all of the elements (or skipped them)
-        # but still have some segments left (or perhaps have precisely zero left).
-        # In either case, we're golden. Return successfully, with any leftovers as
-        # the unmatched elements. Meta all go at the end regardless of wny trailing
-        # whitespace.
+            # Match the current element against the current position.
+            with parse_context.deeper_match(name=f"Sequence-@{idx}") as ctx:
+                # HACK: Segment slicing hack to limit
+                elem_match = elem.match(segments[:max_idx], _idx, ctx)
+
+            # Did we fail to match? (totally or un-cleanly)
+            if not elem_match:
+                # If we can't match an element, we should ascertain whether it's
+                # required. If so then fine, move on, but otherwise we should
+                # crash out without a match. We have not matched the sequence.
+                if elem.is_optional():
+                    # Pass this one and move onto the next element.
+                    continue
+
+                if self.parse_mode == ParseMode.STRICT:
+                    # In a strict mode, failing to match an element means that
+                    # we don't match anything.
+                    return MatchResult.empty_at(idx)
+
+                if (
+                    self.parse_mode == ParseMode.GREEDY_ONCE_STARTED
+                    and matched_idx == start_idx
+                ):
+                    # If it's only greedy once started, and we haven't matched
+                    # anything yet, then we also don't match anything.
+                    return MatchResult.empty_at(idx)
+
+                # On any of the other modes (GREEDY or GREEDY_ONCE_STARTED)
+                # we've effectively already claimed the segments, we've
+                # just failed to match. In which case it's unparsable.
+
+                # Handle the simple case where we haven't even started the
+                # sequence yet first:
+                if matched_idx == start_idx:
+                    return MatchResult(
+                        matched_slice=slice(start_idx, max_idx),
+                        matched_class=UnparsableSegment,
+                        segment_kwargs={
+                            "expected": (
+                                f"{elem} to start sequence. Found {segments[_idx]}"
+                            )
+                        },
+                    )
+
+                # Then handle the case of a partial match.
+                _start_idx = skip_start_index_forward_to_code(
+                    segments, matched_idx, max_idx
+                )
+                return MatchResult(
+                    # NOTE: We use the already matched segments in the
+                    # return value so that if any have already been
+                    # matched, the user can see that. Those are not
+                    # part of the unparsable section.
+                    # NOTE: The unparsable section is _included_ in the span
+                    # of the parent match.
+                    # TODO: Make tests to assert that child matches sit within
+                    # the parent!!!
+                    matched_slice=slice(start_idx, max_idx),
+                    insert_segments=insert_segments,
+                    child_matches=child_matches
+                    + (
+                        MatchResult(
+                            # The unparsable section is just the remaining
+                            # segments we were unable to match from the
+                            # sequence.
+                            matched_slice=slice(_start_idx, max_idx),
+                            matched_class=UnparsableSegment,
+                            segment_kwargs={
+                                "expected": (
+                                    f"{elem} after {segments[matched_idx - 1]}. "
+                                    f"Found {segments[_idx]}"
+                                )
+                            },
+                        ),
+                    ),
+                )
+
+            # Flush any metas...
+            insert_segments += _flush_metas(matched_idx, _idx, meta_buffer, segments)
+            meta_buffer = []
+
+            # Otherwise we _do_ have a match. Update the position.
+            matched_idx = elem_match.matched_slice.stop
+            parse_context.update_progress(matched_idx)
+
+            if first_match and self.parse_mode == ParseMode.GREEDY_ONCE_STARTED:
+                # In the GREEDY_ONCE_STARTED mode, we first look ahead to find a
+                # terminator after the first match (and only the first match).
+                max_idx = trim_to_terminator(
+                    segments,
+                    matched_idx,
+                    terminators=[*self.terminators, *parse_context.terminators],
+                    parse_context=parse_context,
+                )
+                first_match = False
+
+            # How we deal with child segments depends on whether it had a matched
+            # class or not.
+            # If it did, then just add it as a child match and we're done. Move on.
+            if elem_match.matched_class:
+                child_matches += (elem_match,)
+                continue
+            # Otherwise, we un-nest the returned structure, adding any inserts and
+            # children into the inserts and children of this sequence.
+            child_matches += elem_match.child_matches
+            insert_segments += elem_match.insert_segments
+
+        # If we get to here, we've matched all of the elements (or skipped them).
+        insert_segments += tuple((matched_idx, meta) for meta in meta_buffer)
+
+        # Finally if we're in one of the greedy modes, and there's anything
+        # left as unclaimed, mark it as unparsable.
+        if self.parse_mode in (ParseMode.GREEDY, ParseMode.GREEDY_ONCE_STARTED):
+            if max_idx > matched_idx:
+                _idx = skip_start_index_forward_to_code(segments, matched_idx, max_idx)
+                _stop_idx = skip_stop_index_backward_to_code(segments, max_idx, _idx)
+
+                if _stop_idx > _idx:
+                    child_matches += (
+                        MatchResult(
+                            # The unparsable section is just the remaining
+                            # segments we were unable to match from the
+                            # sequence.
+                            matched_slice=slice(_idx, _stop_idx),
+                            matched_class=UnparsableSegment,
+                            # TODO: We should come up with a better "expected" string
+                            # than this
+                            segment_kwargs={"expected": "Nothing here."},
+                        ),
+                    )
+                    # Match up to the end.
+                    matched_idx = _stop_idx
 
         return MatchResult(
-            BaseSegment._position_segments(
-                matched_segments.matched_segments + meta_pre_nc + meta_post_nc,
-            ),
-            unmatched_segments,
+            matched_slice=slice(start_idx, matched_idx),
+            insert_segments=insert_segments,
+            child_matches=child_matches,
         )
 
 
@@ -206,30 +386,66 @@ class Bracketed(Sequence):
       brackets to that sequence.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args: Union[Matchable, str],
+        bracket_type: str = "round",
+        bracket_pairs_set: str = "bracket_pairs",
+        start_bracket: Optional[Matchable] = None,
+        end_bracket: Optional[Matchable] = None,
+        allow_gaps: bool = True,
+        optional: bool = False,
+        parse_mode: ParseMode = ParseMode.STRICT,
+    ) -> None:
+        """Initialize the object.
+
+        Args:
+            *args (Union[Matchable, str]): Variable length arguments which
+                can be of type 'Matchable' or 'str'.
+            bracket_type (str, optional): The type of bracket used.
+                Defaults to 'round'.
+            bracket_pairs_set (str, optional): The set of bracket pairs.
+                Defaults to 'bracket_pairs'.
+            start_bracket (Optional[Matchable], optional): The start bracket.
+                Defaults to None.
+            end_bracket (Optional[Matchable], optional): The end bracket.
+                Defaults to None.
+            allow_gaps (bool, optional): Whether to allow gaps. Defaults to True.
+            optional (bool, optional): Whether optional. Defaults to False.
+            parse_mode (ParseMode, optional): The parse mode. Defaults to
+                ParseMode.STRICT.
+        """
         # Store the bracket type. NB: This is only
         # hydrated into segments at runtime.
-        self.bracket_type = kwargs.pop("bracket_type", "round")
-        self.bracket_pairs_set = kwargs.pop("bracket_pairs_set", "bracket_pairs")
+        self.bracket_type = bracket_type
+        self.bracket_pairs_set = bracket_pairs_set
         # Allow optional override for special bracket-like things
-        self.start_bracket = kwargs.pop("start_bracket", None)
-        self.end_bracket = kwargs.pop("end_bracket", None)
-        super().__init__(*args, **kwargs)
+        self.start_bracket = start_bracket
+        self.end_bracket = end_bracket
+        super().__init__(
+            *args,
+            allow_gaps=allow_gaps,
+            optional=optional,
+            parse_mode=parse_mode,
+        )
 
     @cached_method_for_parse_context
-    def simple(self, parse_context: ParseContext, crumbs=None) -> Optional[List[str]]:
-        """Does this matcher support a uppercase hash matching route?
+    def simple(
+        self, parse_context: ParseContext, crumbs: Optional[Tuple[str]] = None
+    ) -> SimpleHintType:
+        """Check if the matcher supports an uppercase hash matching route.
 
         Bracketed does this easily, we just look for the bracket.
         """
         start_bracket, _, _ = self.get_bracket_from_dialect(parse_context)
         return start_bracket.simple(parse_context=parse_context, crumbs=crumbs)
 
-    def get_bracket_from_dialect(self, parse_context):
+    def get_bracket_from_dialect(
+        self, parse_context: ParseContext
+    ) -> Tuple[Matchable, Matchable, bool]:
         """Rehydrate the bracket segments in question."""
-        for bracket_type, start_ref, end_ref, persists in parse_context.dialect.sets(
-            self.bracket_pairs_set
-        ):
+        bracket_pairs = parse_context.dialect.bracket_sets(self.bracket_pairs_set)
+        for bracket_type, start_ref, end_ref, persists in bracket_pairs:
             if bracket_type == self.bracket_type:
                 start_bracket = parse_context.dialect.ref(start_ref)
                 end_bracket = parse_context.dialect.ref(end_ref)
@@ -242,30 +458,31 @@ class Bracketed(Sequence):
             )
         return start_bracket, end_bracket, persists
 
-    @match_wrapper()
-    @allow_ephemeral
     def match(
-        self, segments: Tuple["BaseSegment", ...], parse_context: ParseContext
+        self,
+        segments: SequenceType["BaseSegment"],
+        idx: int,
+        parse_context: "ParseContext",
     ) -> MatchResult:
-        """Match if a bracketed sequence, with content that matches one of the elements.
+        """Match a bracketed sequence of elements.
 
-        1. work forwards to find the first bracket.
-           If we find something other that whitespace, then fail out.
-        2. Once we have the first bracket, we need to bracket count forward to find its
-           partner.
-        3. Assuming we find its partner then we try and match what goes between them
-           using the match method of Sequence.
-           If we match, great. If not, then we return an empty match.
-           If we never find its partner then we return an empty match but should
-           probably log a parsing warning, or error?
+        Once we've confirmed the existence of the initial opening bracket,
+        this grammar delegates to `resolve_bracket()` to recursively close
+        any brackets we fund until the initial opening bracket has been
+        closed.
 
+        After the closing point of the bracket has been established, we then
+        match the content against the elements of this grammar (as options,
+        not as a sequence). How the grammar behaves on different content
+        depends on the `parse_mode`:
+
+        - If the parse mode is `GREEDY`, this always returns a match if
+          the opening and closing brackets are found. Anything unexpected
+          within the brackets is marked as `unparsable`.
+        - If the parse mode is `STRICT`, then this only returns a match if
+          the content of the brackets matches (and matches *completely*)
+          one of the elements of the grammar. Otherwise no match.
         """
-        # Trim ends if allowed.
-        if self.allow_gaps:
-            pre_nc, seg_buff, post_nc = trim_non_code_segments(segments)
-        else:
-            seg_buff = segments  # pragma: no cover TODO?
-
         # Rehydrate the bracket segments in question.
         # bracket_persists controls whether we make a BracketedSegment or not.
         start_bracket, end_bracket, bracket_persists = self.get_bracket_from_dialect(
@@ -275,124 +492,101 @@ class Bracketed(Sequence):
         start_bracket = self.start_bracket or start_bracket
         end_bracket = self.end_bracket or end_bracket
 
-        # Are we dealing with a pre-existing BracketSegment?
-        if seg_buff[0].is_type("bracketed"):
-            # NOTE: We copy the original segment here because otherwise we will begin to
-            # edit a _reference_ and not a copy - and that may lead to unused matches
-            # leaking out. https://github.com/sqlfluff/sqlfluff/issues/3277
-            seg: BracketedSegment = cast(BracketedSegment, seg_buff[0].copy())
-            # Check it's of the right kind of bracket
-            if not start_bracket.match(seg.start_bracket, parse_context):
-                # Doesn't match - return no match
-                return MatchResult.from_unmatched(segments)
-
-            content_segs = seg.segments[len(seg.start_bracket) : -len(seg.end_bracket)]
-            bracket_segment = seg
-            trailing_segments = seg_buff[1:]
         # Otherwise try and match the segments directly.
-        else:
-            # Look for the first bracket
-            with parse_context.deeper_match() as ctx:
-                start_match = start_bracket.match(seg_buff, parse_context=ctx)
-            if start_match:
-                seg_buff = start_match.unmatched_segments
-            else:
-                # Can't find the opening bracket. No Match.
-                return MatchResult.from_unmatched(segments)
+        # Look for the first bracket
+        with parse_context.deeper_match(name="Bracketed-Start") as ctx:
+            start_match = start_bracket.match(segments, idx, ctx)
 
-            # Look for the closing bracket
-            content_segs, end_match, _ = self._bracket_sensitive_look_ahead_match(
-                segments=seg_buff,
-                matchers=[end_bracket],
-                parse_context=parse_context,
-                start_bracket=start_bracket,
-                end_bracket=end_bracket,
-                bracket_pairs_set=self.bracket_pairs_set,
-            )
-            if not end_match:  # pragma: no cover
-                raise SQLParseError(
-                    "Couldn't find closing bracket for opening bracket.",
-                    segment=start_match.matched_segments[0],
-                )
+        if not start_match:
+            # Can't find the opening bracket. No Match.
+            return MatchResult.empty_at(idx)
 
-            # Construct a bracket segment
-            bracket_segment = BracketedSegment(
-                segments=(
-                    start_match.matched_segments
-                    + content_segs
-                    + end_match.matched_segments
-                ),
-                start_bracket=start_match.matched_segments,
-                end_bracket=end_match.matched_segments,
-            )
-            trailing_segments = end_match.unmatched_segments
+        # NOTE: Ideally we'd match on the _content_ next, providing we were sure
+        # we wouldn't hit the end. But it appears the terminator logic isn't
+        # robust enough for that yet. Until then, we _first_ look for the closing
+        # bracket and _then_ match on the inner content.
+        bracketed_match = resolve_bracket(
+            segments,
+            opening_match=start_match,
+            opening_matcher=start_bracket,
+            start_brackets=[start_bracket],
+            end_brackets=[end_bracket],
+            bracket_persists=[bracket_persists],
+            parse_context=parse_context,
+        )
 
-        # Then trim whitespace and deal with the case of non-code content e.g. "(   )"
+        # If the brackets couldn't be resolved, then it will raise a parsing error
+        # that means we can assert that brackets have been matched if there is no
+        # error.
+        assert bracketed_match
+
+        # The bracketed_match will also already have been wrapped as a
+        # BracketedSegment including the references to start and end brackets.
+        # We only need to add content.
+
+        # Work forward through any gaps at the start and end.
+        # NOTE: We assume that all brackets are single segment.
+        _idx = start_match.matched_slice.stop
+        _end_idx = bracketed_match.matched_slice.stop - 1
         if self.allow_gaps:
-            pre_segs, content_segs, post_segs = trim_non_code_segments(content_segs)
-        else:  # pragma: no cover TODO?
-            pre_segs = ()
-            post_segs = ()
+            _idx = skip_start_index_forward_to_code(segments, _idx)
+            _end_idx = skip_stop_index_backward_to_code(segments, _end_idx, _idx)
 
-        # If we've got a case of empty brackets check whether that is allowed.
-        if not content_segs:
-            if not self._elements or (
-                all(e.is_optional() for e in self._elements)
-                and (self.allow_gaps or (not pre_segs and not post_segs))
-            ):
-                return MatchResult(
-                    (bracket_segment,)
-                    if bracket_persists
-                    else bracket_segment.segments,
-                    trailing_segments,
-                )
-            else:
-                return MatchResult.from_unmatched(segments)
+        # Try and match content, clearing and adding the closing bracket
+        # to the terminators.
+        with parse_context.deeper_match(
+            name="Bracketed", clear_terminators=True, push_terminators=[end_bracket]
+        ) as ctx:
+            # NOTE: This slice is a bit of a hack, but it's the only
+            # reliable way so far to make sure we don't "over match" when
+            # presented with a potential terminating bracket.
+            content_match = super().match(segments[:_end_idx], _idx, ctx)
 
-        # Match the content using super. Sequence will interpret the content of the
-        # elements.
-        with parse_context.deeper_match() as ctx:
-            content_match = super().match(content_segs, parse_context=ctx)
+        # No complete match within the brackets? Stop here and return unmatched.
+        if (
+            not content_match.matched_slice.stop == _end_idx
+            and self.parse_mode == ParseMode.STRICT
+        ):
+            return MatchResult.empty_at(idx)
 
-        # We require a complete match for the content (hopefully for obvious reasons)
-        if content_match.is_complete():
-            # Reconstruct the bracket segment post match.
-            # We need to realign the meta segments so the pos markers are correct.
-            # Have we already got indents?
-            meta_idx = None
-            for idx, seg in enumerate(bracket_segment.segments):
-                if (
-                    seg.is_meta
-                    and cast(MetaSegment, seg).indent_val > 0
-                    and not cast(MetaSegment, seg).is_template
-                ):
-                    meta_idx = idx
-                    break
-            # If we've already got indents, don't add more.
-            if meta_idx:
-                bracket_segment.segments = BaseSegment._position_segments(
-                    bracket_segment.start_bracket
-                    + pre_segs
-                    + content_match.all_segments()
-                    + post_segs
-                    + bracket_segment.end_bracket
-                )
-            # Append some indent and dedent tokens at the start and the end.
-            else:
-                bracket_segment.segments = BaseSegment._position_segments(
-                    # NB: The nc segments go *outside* the indents.
-                    bracket_segment.start_bracket
-                    + (Indent(),)  # Add a meta indent here
-                    + pre_segs
-                    + content_match.all_segments()
-                    + post_segs
-                    + (Dedent(),)  # Add a meta indent here
-                    + bracket_segment.end_bracket
-                )
-            return MatchResult(
-                (bracket_segment,) if bracket_persists else bracket_segment.segments,
-                trailing_segments,
+        # What's between the final match and the content. Hopefully just gap?
+        intermediate_slice = slice(
+            # NOTE: Assumes that brackets are always of size 1.
+            content_match.matched_slice.stop,
+            bracketed_match.matched_slice.stop - 1,
+        )
+        if not self.allow_gaps and not is_zero_slice(intermediate_slice):
+            # NOTE: In this clause, content_match will never have matched. Either
+            # we're in STRICT mode, and would have exited in the `return` above,
+            # or we're in GREEDY mode and the `super().match()` will have already
+            # claimed the whole sequence with nothing left. This clause is
+            # effectively only accessible in a bracketed section which doesn't
+            # allow whitespace but nonetheless has some, which is fairly rare.
+            expected = str(self._elements)
+            # Whatever is in the gap should be marked as an UnparsableSegment.
+            child_match = MatchResult(
+                intermediate_slice,
+                UnparsableSegment,
+                segment_kwargs={"expected": expected},
             )
-        # No complete match. Fail.
+            content_match = content_match.append(child_match)
+
+        # We now have content and bracketed matches. Depending on whether the intent
+        # is to wrap or not we should construct the response.
+        _content_matches: Tuple[MatchResult, ...]
+        if content_match.matched_class:
+            _content_matches = bracketed_match.child_matches + (content_match,)
         else:
-            return MatchResult.from_unmatched(segments)
+            _content_matches = (
+                bracketed_match.child_matches + content_match.child_matches
+            )
+
+        # NOTE: Whether a bracket is wrapped or unwrapped (i.e. the effect of
+        # `bracket_persists`, is controlled by `resolve_bracket`)
+        return MatchResult(
+            matched_slice=bracketed_match.matched_slice,
+            matched_class=bracketed_match.matched_class,
+            segment_kwargs=bracketed_match.segment_kwargs,
+            insert_segments=bracketed_match.insert_segments,
+            child_matches=_content_matches,
+        )

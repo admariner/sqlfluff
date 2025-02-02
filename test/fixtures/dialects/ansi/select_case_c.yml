@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: ea171e2218df3a613023d2a683870954ca0b9e3d75cc3dc5b42592f7fcf71db0
+_hash: 94ac227803111888f8b95650c1aacd4efd2711a99fa442c7d0abc142d68f1c29
 file:
 - statement:
     select_statement:
@@ -104,30 +104,31 @@ file:
           function:
             function_name:
               function_name_identifier: cast
-            bracketed:
-              start_bracket: (
-              expression:
-                case_expression:
-                - keyword: case
-                - when_clause:
-                  - keyword: when
-                  - expression:
-                      column_reference:
-                        naked_identifier: col1
-                  - keyword: then
-                  - expression:
-                      column_reference:
-                        naked_identifier: col2
-                - else_clause:
-                    keyword: else
-                    expression:
-                      column_reference:
-                        naked_identifier: col3
-                - keyword: end
-              keyword: as
-              data_type:
-                data_type_identifier: text
-              end_bracket: )
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  case_expression:
+                  - keyword: case
+                  - when_clause:
+                    - keyword: when
+                    - expression:
+                        column_reference:
+                          naked_identifier: col1
+                    - keyword: then
+                    - expression:
+                        column_reference:
+                          naked_identifier: col2
+                  - else_clause:
+                      keyword: else
+                      expression:
+                        column_reference:
+                          naked_identifier: col3
+                  - keyword: end
+                keyword: as
+                data_type:
+                  data_type_identifier: text
+                end_bracket: )
           alias_expression:
             keyword: as
             naked_identifier: mycol
@@ -138,4 +139,40 @@ file:
             table_expression:
               table_reference:
                 naked_identifier: table1
+- statement_terminator: ;
+- statement:
+    select_statement:
+      select_clause:
+      - keyword: SELECT
+      - select_clause_element:
+          column_reference:
+            naked_identifier: column1
+      - comma: ','
+      - select_clause_element:
+          expression:
+            case_expression:
+            - keyword: CASE
+            - when_clause:
+              - keyword: WHEN
+              - expression:
+                  quoted_literal: "'test'"
+              - keyword: THEN
+              - expression:
+                  numeric_literal: '12'
+            - else_clause:
+                keyword: ELSE
+                expression:
+                  numeric_literal: '0'
+            - keyword: END
+            comparison_operator:
+            - raw_comparison_operator: '>'
+            - raw_comparison_operator: '='
+            numeric_literal: '0'
+      from_clause:
+        keyword: FROM
+        from_expression:
+          from_expression_element:
+            table_expression:
+              table_reference:
+                naked_identifier: boo
 - statement_terminator: ;

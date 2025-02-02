@@ -1,10 +1,11 @@
 """Implementation of Rule ST08."""
-from typing import Optional
 
-from sqlfluff.core.parser import KeywordSegment, WhitespaceSegment
+from typing import Optional, Tuple
+
+from sqlfluff.core.parser import BaseSegment, KeywordSegment, WhitespaceSegment
 from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
-from sqlfluff.utils.functional import sp, FunctionalContext
+from sqlfluff.utils.functional import FunctionalContext, Segments, sp
 from sqlfluff.utils.reflow.sequence import ReflowSequence
 
 
@@ -76,11 +77,13 @@ class Rule_ST08(BaseRule):
             if not anchor.is_type("expression") or len(anchor.segments) != 1:
                 return None
             function_name = children.select(sp.is_type("function_name")).first()
-            bracketed = children.first(sp.is_type("bracketed"))
+            bracketed = children.first(sp.is_type("function_contents"))
             if (
                 not function_name
                 or function_name[0].raw_upper != "DISTINCT"
                 or not bracketed
+                # If the DISTINCT has a subquery, don't remove the brackets
+                or bracketed.recursive_crawl("select_statement", recurse_into=False)
             ):
                 return None
             # Using ReflowSequence here creates an unneeded space between CONCAT
@@ -103,7 +106,7 @@ class Rule_ST08(BaseRule):
                     LintFix.replace(
                         anchor,
                         (KeywordSegment("DISTINCT"), WhitespaceSegment())
-                        + self.filter_meta(bracketed[0].segments)[1:-1],
+                        + self.filter_meta(bracketed.children()[0].segments)[1:-1],
                     )
                 ],
             )
@@ -117,7 +120,9 @@ class Rule_ST08(BaseRule):
                 )
         return None
 
-    def _remove_unneeded_brackets(self, context, bracketed):
+    def _remove_unneeded_brackets(
+        self, context: RuleContext, bracketed: Segments
+    ) -> Tuple[BaseSegment, ReflowSequence]:
         # Remove the brackets and strip any meta segments.
         anchor = bracketed.get()
         assert anchor

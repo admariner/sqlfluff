@@ -1,8 +1,9 @@
 """Common Test Fixtures."""
+
 import hashlib
 import io
 import os
-from typing import NamedTuple
+from typing import List, NamedTuple, Tuple
 
 import pytest
 import yaml
@@ -10,17 +11,17 @@ import yaml
 from sqlfluff.cli.commands import quoted_presenter
 from sqlfluff.core import FluffConfig
 from sqlfluff.core.linter import Linter
-from sqlfluff.core.parser import Parser, Lexer
+from sqlfluff.core.parser import Lexer, Parser
 from sqlfluff.core.parser.markers import PositionMarker
 from sqlfluff.core.parser.segments import (
-    Indent,
+    BaseSegment,
+    CodeSegment,
+    CommentSegment,
     Dedent,
-    WhitespaceSegment,
+    Indent,
     NewlineSegment,
     SymbolSegment,
-    CommentSegment,
-    CodeSegment,
-    BaseSegment,
+    WhitespaceSegment,
 )
 from sqlfluff.core.rules import BaseRule
 from sqlfluff.core.templaters import TemplatedFile
@@ -36,7 +37,9 @@ class ParseExample(NamedTuple):
     sqlfile: str
 
 
-def get_parse_fixtures(fail_on_missing_yml=False):
+def get_parse_fixtures(
+    fail_on_missing_yml=False,
+) -> Tuple[List[ParseExample], List[Tuple[str, str, bool, str]]]:
     """Search for all parsing fixtures."""
     parse_success_examples = []
     parse_structure_examples = []
@@ -80,7 +83,7 @@ def make_dialect_path(dialect, fname):
 
 def load_file(dialect, fname):
     """Load a file."""
-    with open(make_dialect_path(dialect, fname)) as f:
+    with open(make_dialect_path(dialect, fname), encoding="utf8") as f:
         raw = f.read()
     return raw
 
@@ -116,7 +119,7 @@ def parse_example_file(dialect: str, sqlfile: str):
     raw = load_file(dialect, sqlfile)
     # Lex and parse the file
     tokens, _ = Lexer(config=config).lex(raw)
-    tree = Parser(config=config).parse(tokens)
+    tree = Parser(config=config).parse(tokens, fname=dialect + "/" + sqlfile)
     return tree
 
 
@@ -126,7 +129,7 @@ def compute_parse_tree_hash(tree):
         r = tree.as_record(code_only=True, show_raw=True)
         if r:
             r_io = io.StringIO()
-            yaml.dump(r, r_io, sort_keys=False)
+            yaml.dump(r, r_io, sort_keys=False, allow_unicode=True)
             result = hashlib.blake2s(r_io.getvalue().encode("utf-8")).hexdigest()
             return result
     return None
@@ -135,7 +138,7 @@ def compute_parse_tree_hash(tree):
 def load_yaml(fpath):
     """Load a yaml structure and process it into a tuple."""
     # Load raw file
-    with open(fpath) as f:
+    with open(fpath, encoding="utf8") as f:
         raw = f.read()
     # Parse the yaml
     obj = yaml.safe_load(raw)
@@ -157,6 +160,76 @@ def yaml_loader():
     return load_yaml
 
 
+def _generate_test_segments_func(elems):
+    """Roughly generate test segments.
+
+    This function isn't totally robust, but good enough
+    for testing. Use with caution.
+    """
+    buff = []
+    raw_file = "".join(elems)
+    templated_file = TemplatedFile.from_string(raw_file)
+    idx = 0
+
+    for elem in elems:
+        if elem == "<indent>":
+            buff.append(
+                Indent(pos_marker=PositionMarker.from_point(idx, idx, templated_file))
+            )
+            continue
+        elif elem == "<dedent>":
+            buff.append(
+                Dedent(pos_marker=PositionMarker.from_point(idx, idx, templated_file))
+            )
+            continue
+
+        seg_kwargs = {}
+
+        if set(elem) <= {" ", "\t"}:
+            SegClass = WhitespaceSegment
+        elif set(elem) <= {"\n"}:
+            SegClass = NewlineSegment
+        elif elem == "(":
+            SegClass = SymbolSegment
+            seg_kwargs = {"instance_types": ("start_bracket",)}
+        elif elem == ")":
+            SegClass = SymbolSegment
+            seg_kwargs = {"instance_types": ("end_bracket",)}
+        elif elem == "[":
+            SegClass = SymbolSegment
+            seg_kwargs = {"instance_types": ("start_square_bracket",)}
+        elif elem == "]":
+            SegClass = SymbolSegment
+            seg_kwargs = {"instance_types": ("end_square_bracket",)}
+        elif elem.startswith("--"):
+            SegClass = CommentSegment
+            seg_kwargs = {"instance_types": ("inline_comment",)}
+        elif elem.startswith('"'):
+            SegClass = CodeSegment
+            seg_kwargs = {"instance_types": ("double_quote",)}
+        elif elem.startswith("'"):
+            SegClass = CodeSegment
+            seg_kwargs = {"instance_types": ("single_quote",)}
+        else:
+            SegClass = CodeSegment
+
+        # Set a none position marker which we'll realign at the end.
+        buff.append(
+            SegClass(
+                raw=elem,
+                pos_marker=PositionMarker(
+                    slice(idx, idx + len(elem)),
+                    slice(idx, idx + len(elem)),
+                    templated_file,
+                ),
+                **seg_kwargs,
+            )
+        )
+        idx += len(elem)
+
+    return tuple(buff)
+
+
 @pytest.fixture(scope="module")
 def generate_test_segments():
     """Roughly generate test segments.
@@ -165,76 +238,7 @@ def generate_test_segments():
     but when actually used, this will return the inner function
     which is what you actually need.
     """
-
-    def generate_test_segments_func(elems):
-        """Roughly generate test segments.
-
-        This function isn't totally robust, but good enough
-        for testing. Use with caution.
-        """
-        buff = []
-        raw_file = "".join(elems)
-        templated_file = TemplatedFile.from_string(raw_file)
-        idx = 0
-
-        for elem in elems:
-            if elem == "<indent>":
-                buff.append(
-                    Indent(
-                        pos_marker=PositionMarker.from_point(idx, idx, templated_file)
-                    )
-                )
-                continue
-            elif elem == "<dedent>":
-                buff.append(
-                    Dedent(
-                        pos_marker=PositionMarker.from_point(idx, idx, templated_file)
-                    )
-                )
-                continue
-
-            seg_kwargs = {}
-
-            if set(elem) <= {" ", "\t"}:
-                SegClass = WhitespaceSegment
-            elif set(elem) <= {"\n"}:
-                SegClass = NewlineSegment
-            elif elem == "(":
-                SegClass = SymbolSegment
-                seg_kwargs = {"type": "bracket_open"}
-            elif elem == ")":
-                SegClass = SymbolSegment
-                seg_kwargs = {"type": "bracket_close"}
-            elif elem.startswith("--"):
-                SegClass = CommentSegment
-                seg_kwargs = {"type": "inline_comment"}
-            elif elem.startswith('"'):
-                SegClass = CodeSegment
-                seg_kwargs = {"type": "double_quote"}
-            elif elem.startswith("'"):
-                SegClass = CodeSegment
-                seg_kwargs = {"type": "single_quote"}
-            else:
-                SegClass = CodeSegment
-
-            # Set a none position marker which we'll realign at the end.
-            buff.append(
-                SegClass(
-                    raw=elem,
-                    pos_marker=PositionMarker(
-                        slice(idx, idx + len(elem)),
-                        slice(idx, idx + len(elem)),
-                        templated_file,
-                    ),
-                    **seg_kwargs,
-                )
-            )
-            idx += len(elem)
-
-        return tuple(buff)
-
-    # Return the function
-    return generate_test_segments_func
+    return _generate_test_segments_func
 
 
 @pytest.fixture

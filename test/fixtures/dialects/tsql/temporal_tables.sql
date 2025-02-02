@@ -7,8 +7,7 @@ SELECT * FROM Employee
 SELECT * FROM Employee
   FOR SYSTEM_TIME ALL;
 
-
- SELECT * FROM Employee
+SELECT * FROM Employee
   FOR SYSTEM_TIME
     FROM '2021-01-01 00:00:00.0000000' TO '2022-01-01 00:00:00.0000000';
 
@@ -20,6 +19,17 @@ SELECT * FROM Employee
   FOR SYSTEM_TIME
     CONTAINED IN ('2021-01-01 00:00:00.0000000', '2022-01-01 00:00:00.0000000');
 
+DECLARE @StartTime DATETIME2 = '2021-01-01 00:00:00';
+DECLARE @EndTime DATETIME2 = '2022-01-01 00:00:00';
+SELECT * FROM Employee
+  FOR SYSTEM_TIME
+    FROM @StartTime TO @EndTime;
+
+DECLARE @PointInTime DATETIME2 = '2021-01-01 00:00:00';
+SELECT * FROM Employee
+  FOR SYSTEM_TIME
+    AS OF @PointInTime;
+
 -- Create Temporal Tables
 
 CREATE TABLE [dbo].[EC DC] (
@@ -28,6 +38,22 @@ CREATE TABLE [dbo].[EC DC] (
     [ColumnDecimal] decimal(10,3)
 )
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.EmployeeHistory), DURABILITY = SCHEMA_ONLY );
+;
+GO
+
+
+-- https://learn.microsoft.com/en-us/sql/relational-databases/tables/creating-a-system-versioned-temporal-table?view=sql-server-ver16#creating-a-temporal-table-with-a-default-history-table
+CREATE TABLE Department
+(
+    DeptID INT NOT NULL PRIMARY KEY CLUSTERED
+  , DeptName VARCHAR(50) NOT NULL
+  , ManagerID INT NULL
+  , ParentDeptID INT NULL
+  , ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL
+  , ValidTo DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL
+  , PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)
+)
+WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.DepartmentHistory))
 ;
 GO
 

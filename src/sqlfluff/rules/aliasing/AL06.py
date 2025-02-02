@@ -1,6 +1,6 @@
 """Implementation of Rule AL06."""
 
-from typing import Optional
+from typing import List, Optional
 
 from sqlfluff.core.rules import BaseRule, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
@@ -25,7 +25,7 @@ class Rule_AL06(BaseRule):
 
     Avoid aliases. Avoid short aliases when aliases are necessary.
 
-    See also: :class:`Rule_AL07`.
+    See also: :sqlfluff:ref:`AL07`.
 
     .. code-block:: sql
 
@@ -49,7 +49,7 @@ class Rule_AL06(BaseRule):
     config_keywords = ["min_alias_length", "max_alias_length"]
     crawl_behaviour = SegmentSeekerCrawler({"select_statement"})
 
-    def _eval(self, context: RuleContext) -> Optional[LintResult]:
+    def _eval(self, context: RuleContext) -> Optional[List[LintResult]]:
         """Identify aliases in from clause and join conditions.
 
         Find base table, table expressions in join, and other expressions in select
@@ -64,7 +64,7 @@ class Rule_AL06(BaseRule):
 
         return self._lint_aliases(from_expression_elements) or None
 
-    def _lint_aliases(self, from_expression_elements):
+    def _lint_aliases(self, from_expression_elements) -> Optional[List[LintResult]]:
         """Lint all table aliases."""
         # A buffer to keep any violations.
         violation_buff = []

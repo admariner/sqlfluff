@@ -28,8 +28,11 @@ _dialect_lookup = {
     "db2": ("dialect_db2", "db2_dialect"),
     "duckdb": ("dialect_duckdb", "duckdb_dialect"),
     "exasol": ("dialect_exasol", "exasol_dialect"),
+    "greenplum": ("dialect_greenplum", "greenplum_dialect"),
     "hive": ("dialect_hive", "hive_dialect"),
+    "impala": ("dialect_impala", "impala_dialect"),
     "materialize": ("dialect_materialize", "materialize_dialect"),
+    "mariadb": ("dialect_mariadb", "mariadb_dialect"),
     "mysql": ("dialect_mysql", "mysql_dialect"),
     "oracle": ("dialect_oracle", "oracle_dialect"),
     "postgres": ("dialect_postgres", "postgres_dialect"),
@@ -38,8 +41,11 @@ _dialect_lookup = {
     "soql": ("dialect_soql", "soql_dialect"),
     "sparksql": ("dialect_sparksql", "sparksql_dialect"),
     "sqlite": ("dialect_sqlite", "sqlite_dialect"),
+    "starrocks": ("dialect_starrocks", "starrocks_dialect"),
     "teradata": ("dialect_teradata", "teradata_dialect"),
+    "trino": ("dialect_trino", "trino_dialect"),
     "tsql": ("dialect_tsql", "tsql_dialect"),
+    "vertica": ("dialect_vertica", "vertica_dialect"),
 }
 
 _legacy_dialects = {
@@ -74,6 +80,7 @@ class DialectTuple(NamedTuple):
     label: str
     name: str
     inherits_from: str
+    docstring: str
 
 
 def dialect_readout() -> Iterator[DialectTuple]:
@@ -82,8 +89,9 @@ def dialect_readout() -> Iterator[DialectTuple]:
         dialect = load_raw_dialect(dialect_label)
         yield DialectTuple(
             label=dialect_label,
-            name=dialect.name,
+            name=dialect.formatted_name,
             inherits_from=dialect.inherits_from or "nothing",
+            docstring=dialect.docstring,
         )
 
 
@@ -93,3 +101,13 @@ def dialect_selector(s: str) -> Dialect:
     # Expand any callable references at this point.
     # NOTE: The result of .expand() is a new class.
     return dialect.expand()
+
+
+__all__ = [
+    "Dialect",
+    "DialectTuple",
+    "SQLFluffUserError",
+    "load_raw_dialect",
+    "dialect_readout",
+    "dialect_selector",
+]

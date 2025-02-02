@@ -1,10 +1,13 @@
 """Implementation of Rule LT12."""
-from typing import List, Optional, Tuple
 
+from typing import List, Optional, Tuple, cast
+
+from sqlfluff.core.helpers.string import get_trailing_whitespace_from_string
 from sqlfluff.core.parser import BaseSegment, NewlineSegment
-from sqlfluff.core.rules import BaseRule, LintResult, LintFix, RuleContext
+from sqlfluff.core.parser.segments import SourceFix, TemplateSegment
+from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.crawlers import RootOnlyCrawler
-from sqlfluff.utils.functional import Segments, sp, tsp, FunctionalContext
+from sqlfluff.utils.functional import FunctionalContext, Segments, sp, tsp
 
 
 def get_trailing_newlines(segment: BaseSegment) -> List[BaseSegment]:
@@ -102,8 +105,10 @@ class Rule_LT12(BaseRule):
 
     """
 
-    name = "layout.end-of-file"
-    aliases = ("L009",)
+    name = "layout.end_of_file"
+    # Between 2.0.0 and 2.0.4 we supported had a kebab-case name for this rule
+    # so the old name remains here as an alias to enable backward compatibility.
+    aliases = ("L009", "layout.end-of-file")
     groups = ("all", "core", "layout")
 
     targets_templated = True
@@ -122,6 +127,48 @@ class Rule_LT12(BaseRule):
         # We only care about the final segment of the parse tree.
         parent_stack, segment = get_last_segment(FunctionalContext(context).segment)
         self.logger.debug("Found last segment as: %s", segment)
+        if not segment:
+            # NOTE: Edge case. If the file is totally empty, we won't find a final
+            # segment. In this case return without error.
+            return None
+
+        # Check whether the final segment is a placeholder. If it is, we need
+        # to proceed more carefully.
+        _trailing_segment = segment.get()
+        assert _trailing_segment
+        if _trailing_segment.is_type("placeholder"):
+            self.logger.debug("Trailing placeholder detected.")
+            _template_segment = cast(TemplateSegment, _trailing_segment)
+            _trailing_whitespace = get_trailing_whitespace_from_string(
+                _template_segment.source_str
+            )
+            # Does it already end with a single whitespace?
+            if _trailing_whitespace == "\n":
+                return None
+            # If this segment already has fixes applied, don't try and do it
+            # again.
+            if _template_segment.source_fixes:
+                self.logger.debug("Fixes already applied. Aborting...")
+                return None
+            # It's not a single newline. Return a fix to make it one.
+            _current_stop = _template_segment.pos_marker.source_slice.stop
+            source_fix = SourceFix(
+                "\n",
+                slice(
+                    _current_stop - len(_trailing_whitespace),
+                    _current_stop,
+                ),
+                _template_segment.pos_marker.templated_slice,
+            )
+            return LintResult(
+                anchor=_template_segment,
+                fixes=[
+                    LintFix.replace(
+                        _template_segment,
+                        [_template_segment.edit(source_fixes=[source_fix])],
+                    )
+                ],
+            )
 
         trailing_newlines = Segments(*get_trailing_newlines(context.segment))
         trailing_literal_newlines = trailing_newlines

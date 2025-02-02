@@ -8,8 +8,14 @@ from sqlfluff.core.parser import (
     AnyNumberOf,
     BaseSegment,
     Bracketed,
+    CodeSegment,
+    Dedent,
     Delimited,
-    TypedParser,
+    IdentifierSegment,
+    Indent,
+    KeywordSegment,
+    LiteralSegment,
+    Matchable,
     Nothing,
     OneOf,
     OptionallyBracketed,
@@ -20,8 +26,8 @@ from sqlfluff.core.parser import (
     StringLexer,
     StringParser,
     SymbolSegment,
+    TypedParser,
 )
-from sqlfluff.core.parser.segments.raw import CodeSegment, KeywordSegment
 from sqlfluff.dialects import dialect_ansi as ansi
 from sqlfluff.dialects.dialect_athena_keywords import (
     athena_reserved_keywords,
@@ -30,7 +36,17 @@ from sqlfluff.dialects.dialect_athena_keywords import (
 
 ansi_dialect = load_raw_dialect("ansi")
 
-athena_dialect = ansi_dialect.copy_as("athena")
+athena_dialect = ansi_dialect.copy_as(
+    "athena",
+    formatted_name="AWS Athena",
+    docstring="""**Default Casing**: ``lowercase``
+
+**Quotes**: String Literals: ``''``, ``""`` or |back_quotes|,
+Identifiers: ``""`` or |back_quotes|
+
+The dialect for `Athena <https://aws.amazon.com/athena/>`_
+on Amazon Web Services (AWS).""",
+)
 
 athena_dialect.sets("unreserved_keywords").update(athena_unreserved_keywords)
 athena_dialect.sets("reserved_keywords").update(athena_reserved_keywords)
@@ -43,7 +59,7 @@ athena_dialect.insert_lexer_matchers(
     before="like_operator",
 )
 
-athena_dialect.sets("angle_bracket_pairs").update(
+athena_dialect.bracket_sets("angle_bracket_pairs").update(
     [
         ("angle", "StartAngleBracketSegment", "EndAngleBracketSegment", False),
     ]
@@ -76,7 +92,6 @@ athena_dialect.add(
     BracketedPropertyListGrammar=Bracketed(Delimited(Ref("PropertyGrammar"))),
     CTASPropertyGrammar=Sequence(
         OneOf(
-            "external_location",
             "format",
             "partitioned_by",
             "bucketed_by",
@@ -84,15 +99,17 @@ athena_dialect.add(
             "write_compression",
             "orc_compression",
             "parquet_compression",
+            "compression_level",
             "field_delimiter",
-            "location",
+            "is_external",
+            "table_type",
+            "external_location",
         ),
         Ref("EqualsSegment"),
         Ref("LiteralGrammar"),
     ),
     CTASIcebergPropertyGrammar=Sequence(
         OneOf(
-            "external_location",
             "format",
             "partitioned_by",
             "bucketed_by",
@@ -100,13 +117,19 @@ athena_dialect.add(
             "write_compression",
             "orc_compression",
             "parquet_compression",
+            "compression_level",
             "field_delimiter",
-            "location",
             "is_external",
             "table_type",
+            # Iceberg-specific properties
+            "location",
             "partitioning",
-            "vacuum_max_snapshot_age_ms",
+            "vacuum_max_snapshot_age_seconds",
             "vacuum_min_snapshots_to_keep",
+            "optimize_rewrite_min_data_file_size_bytes",
+            "optimize_rewrite_max_data_file_size_bytes",
+            "optimize_rewrite_data_file_threshold",
+            "optimize_rewrite_delete_file_threshold",
         ),
         Ref("EqualsSegment"),
         Ref("LiteralGrammar"),
@@ -187,10 +210,10 @@ athena_dialect.add(
     ),
     BackQuotedIdentifierSegment=TypedParser(
         "back_quote",
-        ansi.LiteralSegment,
+        IdentifierSegment,
         type="quoted_identifier",
+        casefold=str.lower,
     ),
-    DatetimeWithTZSegment=Sequence(OneOf("TIMESTAMP", "TIME"), "WITH", "TIME", "ZONE"),
 )
 
 athena_dialect.replace(
@@ -199,7 +222,7 @@ athena_dialect.replace(
             Ref("ParameterSegment"),
         ]
     ),
-    Accessor_Grammar=Sequence(
+    AccessorGrammar=Sequence(
         AnyNumberOf(
             Ref("ArrayAccessorSegment"),
             optional=True,
@@ -213,19 +236,23 @@ athena_dialect.replace(
         ),
     ),
     QuotedLiteralSegment=OneOf(
-        TypedParser("single_quote", ansi.LiteralSegment, type="quoted_literal"),
-        TypedParser("double_quote", ansi.LiteralSegment, type="quoted_literal"),
-        TypedParser("back_quote", ansi.LiteralSegment, type="quoted_literal"),
+        TypedParser("single_quote", LiteralSegment, type="quoted_literal"),
+        TypedParser("double_quote", LiteralSegment, type="quoted_literal"),
+        TypedParser("back_quote", LiteralSegment, type="quoted_literal"),
     ),
     TrimParametersGrammar=Nothing(),
     NakedIdentifierSegment=SegmentGenerator(
         # Generate the anti template from the set of reserved keywords
         lambda dialect: RegexParser(
-            r"([_]+|[A-Z0-9_]*[A-Z][A-Z0-9_]*)",
-            ansi.IdentifierSegment,
+            r"[A-Z0-9_]*[A-Z_][A-Z0-9_]*",
+            IdentifierSegment,
             type="naked_identifier",
             anti_template=r"^(" + r"|".join(dialect.sets("reserved_keywords")) + r")$",
+            casefold=str.lower,
         )
+    ),
+    QuotedIdentifierSegment=TypedParser(
+        "double_quote", IdentifierSegment, type="quoted_identifier", casefold=str.lower
     ),
     SingleIdentifierGrammar=ansi_dialect.get_grammar("SingleIdentifierGrammar").copy(
         insert=[
@@ -239,6 +266,17 @@ athena_dialect.replace(
         Ref("ComparisonOperatorGrammar"),
         # Add arrow operators for functions (e.g. filter)
         Ref("RightArrowOperator"),
+    ),
+    PostFunctionGrammar=ansi_dialect.get_grammar("PostFunctionGrammar").copy(
+        # UNNEST can optionally have a WITH ORDINALITY clause
+        insert=[
+            Sequence("WITH", "ORDINALITY", optional=True),
+        ]
+    ),
+    AlterTableDropColumnGrammar=Sequence(
+        "DROP",
+        Ref.keyword("COLUMN"),
+        Ref("SingleIdentifierGrammar"),
     ),
 )
 
@@ -258,12 +296,31 @@ class ArrayTypeSchemaSegment(ansi.ArrayTypeSegment):
 
     type = "array_type_schema"
     match_grammar = Bracketed(
-        Delimited(
-            Sequence(
-                Ref("DatatypeSegment"),
-                Ref("CommentGrammar", optional=True),
-            ),
-            bracket_pairs_set="angle_bracket_pairs",
+        Ref("DatatypeSegment"),
+        bracket_pairs_set="angle_bracket_pairs",
+        bracket_type="angle",
+    )
+
+
+class MapTypeSegment(BaseSegment):
+    """Expression to construct a MAP datatype."""
+
+    type = "map_type"
+    match_grammar = Sequence(
+        "MAP",
+        Ref("MapTypeSchemaSegment", optional=True),
+    )
+
+
+class MapTypeSchemaSegment(BaseSegment):
+    """Expression to construct the schema of a MAP datatype."""
+
+    type = "map_type_schema"
+    match_grammar = Bracketed(
+        Sequence(
+            Ref("PrimitiveTypeSegment"),
+            Ref("CommaSegment"),
+            Ref("DatatypeSegment"),
         ),
         bracket_pairs_set="angle_bracket_pairs",
         bracket_type="angle",
@@ -318,29 +375,8 @@ class PrimitiveTypeSegment(BaseSegment):
         "FLOAT",  # used in DDL
         "REAL",  # used "in SQL functions like SELECT CAST"
         Sequence(
-            "DECIMAL",
-            Bracketed(
-                Ref("NumericLiteralSegment"),
-                Sequence(
-                    Ref("CommaSegment"),
-                    Ref("NumericLiteralSegment"),
-                    optional=True,
-                ),
-            ),
-        ),
-        Sequence(
-            "CHAR",
-            Bracketed(
-                Ref("NumericLiteralSegment"),
-                optional=True,
-            ),
-        ),
-        Sequence(
-            "VARCHAR",
-            Bracketed(
-                Ref("NumericLiteralSegment"),
-                optional=True,
-            ),
+            OneOf("DECIMAL", "CHAR", "VARCHAR"),
+            Ref("BracketedArguments", optional=True),
         ),
         "STRING",
         "BINARY",
@@ -367,22 +403,7 @@ class DatatypeSegment(BaseSegment):
         Ref("PrimitiveTypeSegment"),
         Ref("StructTypeSegment"),
         Ref("ArrayTypeSegment"),
-        Sequence(
-            "MAP",
-            Bracketed(
-                Delimited(
-                    Sequence(
-                        Ref("NakedIdentifierSegment"),
-                        Ref("CommaSegment"),
-                        Ref("DatatypeSegment"),
-                        Ref("CommentGrammar", optional=True),
-                    ),
-                    bracket_pairs_set="angle_bracket_pairs",
-                ),
-                bracket_pairs_set="angle_bracket_pairs",
-                bracket_type="angle",
-            ),
-        ),
+        Ref("MapTypeSegment"),
         Sequence(
             "ROW",
             Bracketed(
@@ -397,19 +418,20 @@ class DatatypeSegment(BaseSegment):
                 )
             ),
         ),
-        Ref("DatetimeWithTZSegment"),
+        Ref("TimeWithTZGrammar"),
     )
 
 
 class StatementSegment(ansi.StatementSegment):
     """Overriding StatementSegment to allow for additional segment parsing."""
 
-    parse_grammar = ansi.StatementSegment.parse_grammar.copy(
+    match_grammar = ansi.StatementSegment.match_grammar.copy(
         insert=[
             Ref("MsckRepairTableStatementSegment"),
             Ref("UnloadStatementSegment"),
             Ref("PrepareStatementSegment"),
             Ref("ExecuteStatementSegment"),
+            Ref("ShowStatementSegment"),
         ],
         remove=[
             Ref("TransactionStatementSegment"),
@@ -419,7 +441,6 @@ class StatementSegment(ansi.StatementSegment):
             Ref("DropModelStatementSegment"),
         ],
     )
-    match_grammar = ansi.StatementSegment.match_grammar
 
 
 class CreateTableStatementSegment(BaseSegment):
@@ -462,7 +483,14 @@ class CreateTableStatementSegment(BaseSegment):
                     Bracketed(
                         Delimited(
                             Sequence(
-                                Ref("ColumnDefinitionSegment"),
+                                OneOf(
+                                    # External tables expect types...
+                                    Ref("ColumnDefinitionSegment"),
+                                    # Iceberg tables don't expect types.
+                                    Ref("SingleIdentifierGrammar"),
+                                    # Iceberg tables also allow partition transforms
+                                    Ref("FunctionSegment"),
+                                ),
                                 Ref("CommentGrammar", optional=True),
                             ),
                         ),
@@ -491,14 +519,14 @@ class CreateTableStatementSegment(BaseSegment):
                 OptionallyBracketed(
                     Ref("SelectableGrammar"),
                 ),
-                Sequence("WITH NO DATA", optional=True),
+                Sequence("WITH", "NO", "DATA", optional=True),
             ),
         ),
     )
 
 
 class MsckRepairTableStatementSegment(BaseSegment):
-    """An `MSCK REPAIR TABLE`statement.
+    """An `MSCK REPAIR TABLE` statement.
 
     The `MSCK REPAIR TABLE` command scans a file system such as Amazon S3 for
     Hive compatible partitions that were added to the file system after the
@@ -657,6 +685,99 @@ class IntervalExpressionSegment(BaseSegment):
                 ),
                 Ref("DatetimeUnitSegment"),
                 Sequence("TO", Ref("DatetimeUnitSegment"), optional=True),
+            ),
+        ),
+    )
+
+
+class GroupByClauseSegment(ansi.GroupByClauseSegment):
+    """A `GROUP BY` clause like in `SELECT`.
+
+    https://docs.aws.amazon.com/athena/latest/ug/select.html#:~:text=%5B-,GROUP,-BY%20%5B%20ALL%20%7C%20DISTINCT%20%5D%20grouping_expressions
+    """
+
+    match_grammar: Matchable = Sequence(
+        "GROUP",
+        "BY",
+        Indent,
+        Delimited(
+            OneOf(
+                Ref("CubeRollupClauseSegment"),
+                Ref("GroupingSetsClauseSegment"),
+                Ref("ColumnReferenceSegment"),
+                Ref("NumericLiteralSegment"),  # Can `GROUP BY 1`
+                Ref("ExpressionSegment"),  # Can `GROUP BY coalesce(col, 1)`
+            ),
+            terminators=[
+                Sequence("ORDER", "BY"),
+                "LIMIT",
+                "OFFSET",
+                "HAVING",
+                Ref("SetOperatorSegment"),
+            ],
+        ),
+        Dedent,
+    )
+
+
+class ShowStatementSegment(BaseSegment):
+    """A `show` execute statement.
+
+    Full Apache Hive `SHOW` reference:
+    https://cwiki.apache.org/confluence/display/Hive/LanguageManual+DDL#LanguageManualDDL-Show
+
+    Athena supported subset:
+    https://docs.aws.amazon.com/athena/latest/ug/ddl-reference.html
+    """
+
+    type = "show_statement"
+    match_grammar = Sequence(
+        "SHOW",
+        OneOf(
+            Sequence(
+                "COLUMNS",
+                OneOf("FROM", "IN"),
+                OneOf(
+                    Sequence(
+                        Ref("DatabaseReferenceSegment"), Ref("TableReferenceSegment")
+                    ),
+                    Sequence(
+                        Ref("TableReferenceSegment"),
+                        Sequence(
+                            OneOf("FROM", "IN"),
+                            Ref("DatabaseReferenceSegment"),
+                            optional=True,
+                        ),
+                    ),
+                ),
+            ),
+            Sequence(
+                "CREATE",
+                OneOf("TABLE", "VIEW"),
+                Ref("TableReferenceSegment"),
+            ),
+            Sequence(
+                OneOf("DATABASES", "SCHEMAS"),
+                Sequence("LIKE", Ref("QuotedLiteralSegment"), optional=True),
+            ),
+            Sequence(
+                "PARTITIONS",
+                Ref("TableReferenceSegment"),
+            ),
+            Sequence(
+                "TABLES",
+                Sequence("IN", Ref("DatabaseReferenceSegment"), optional=True),
+                Ref("QuotedLiteralSegment", optional=True),
+            ),
+            Sequence(
+                "TBLPROPERTIES",
+                Ref("TableReferenceSegment"),
+                Bracketed(Ref("QuotedLiteralSegment"), optional=True),
+            ),
+            Sequence(
+                "VIEWS",
+                Sequence("IN", Ref("DatabaseReferenceSegment"), optional=True),
+                Sequence("LIKE", Ref("QuotedLiteralSegment"), optional=True),
             ),
         ),
     )

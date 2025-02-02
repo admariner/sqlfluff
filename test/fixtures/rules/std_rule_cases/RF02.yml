@@ -103,6 +103,18 @@ test_allow_unqualified_references_in_sparksql_lambdas:
     core:
       dialect: sparksql
 
+test_pass_databricks_lambdas:
+  pass_str: |
+    select
+        i.*,
+        aggregate(i.some_column, 0, (acc, x) -> acc + x) as y
+    from some_table as o
+    inner join some_other_table as i
+        on o.id = i.id;
+  configs:
+    core:
+      dialect: databricks
+
 test_allow_unqualified_references_in_athena_lambdas:
   pass_str: |
     select
@@ -217,6 +229,19 @@ test_pass_column_and_alias_same_name_2_mysql:
     core:
       dialect: mysql
 
+test_pass_variable_reference_in_where_clause_mysql:
+  pass_str: |
+    SET @someVar = 1;
+    SELECT
+        Table1.Col1,
+        Table2.Col2
+    FROM Table1
+    LEFT JOIN Table2 ON Table1.Join1 = Table2.Join1
+    WHERE Table1.FilterCol = @someVar;
+  configs:
+    core:
+      dialect: mysql
+
 test_pass_qualified_references_multi_table_statements_tsql:
   pass_str: |
     SELECT foo.a, vee.b
@@ -289,7 +314,7 @@ test_fail_table_plus_flatten_snowflake_1:
     SELECT
         r.rec:foo::string AS foo,
         value:bar::string AS bar
-    FROM foo.bar AS r, LATERAL FLATTEN(input => rec:result) AS x
+    FROM foo.bar AS r, LATERAL FLATTEN(input => r.rec:result) AS x
   configs:
     core:
       dialect: snowflake
@@ -301,7 +326,7 @@ test_fail_table_plus_flatten_snowflake_2:
     SELECT
         r.rec:foo::string AS foo,
         value:bar::string AS bar
-    FROM foo.bar AS r, LATERAL FLATTEN(input => rec:result)
+    FROM foo.bar AS r, LATERAL FLATTEN(input => r.rec:result)
   configs:
     core:
       dialect: snowflake
@@ -313,7 +338,7 @@ test_pass_table_plus_flatten_snowflake_1:
     SELECT
         r.rec:foo::string AS foo,
         x.value:bar::string AS bar
-    FROM foo.bar AS r, LATERAL FLATTEN(input => rec:result) AS x
+    FROM foo.bar AS r, LATERAL FLATTEN(input => r.rec:result) AS x
   configs:
     core:
       dialect: snowflake
@@ -411,3 +436,88 @@ test_pass_redshift_convert:
   configs:
     core:
       dialect: redshift
+
+test_fail_unreferenced_subquery_column:
+  # Issue 6067
+  fail_str: |
+    SELECT a
+    FROM foo
+    WHERE a IN (SELECT a FROM bar)
+
+test_pass_referenced_subquery_column:
+  # Issue 6067
+  pass_str: |
+    SELECT a
+    FROM foo
+    WHERE a IN (SELECT bar.a FROM bar)
+
+test_pass_referenced_subquery_is_self:
+  pass_str: |
+    SELECT *
+    FROM (SELECT a FROM table)
+
+test_pass_declared_bigquery_variable:
+  pass_str: |
+    DECLARE run_time TIMESTAMP DEFAULT '2020-01-01 00:00:00';
+
+    SELECT table_a.age FROM table_a
+    INNER JOIN
+        table_b
+        ON
+            table_a.id = table_b.id
+    WHERE table_a.start_date <= run_time;
+  configs:
+    core:
+      dialect: bigquery
+
+test_pass_from_clause_subquery:
+  pass_str: |
+    SELECT
+        a.id AS a_id,
+        b.id AS b_id
+    FROM
+        (
+            SELECT id
+            FROM foo
+        ) AS a
+    INNER JOIN bar AS b ON a.id = b.ib;
+
+test_pass_join_clause_subquery:
+  pass_str: |
+    SELECT
+        a.id AS a_id,
+        b.id AS b_id
+    FROM bar AS b
+    JOIN (
+            SELECT id
+            FROM foo
+        ) AS a
+    ON a.id = b.id;
+
+test_fail_nested_correlated_subquery_inside_from_clause:
+  fail_str: |
+    SELECT
+        a.id AS a_id,
+        b.id AS b_id
+    FROM
+        (
+            SELECT id
+            FROM foo
+            WHERE id IN (SELECT id FROM baz)
+        ) AS a
+    INNER JOIN bar AS b ON a.id = b.id;
+
+test_fail_select_scalar_subquery:
+  fail_str: |
+    SELECT
+        (SELECT max(id) FROM foo2) AS f1
+    FROM bar;
+
+test_fail_exists_subquery:
+  fail_str: |
+    SELECT id
+    FROM bar
+    WHERE EXISTS (
+        SELECT 1 FROM foo2
+        WHERE bar.id = id
+    );

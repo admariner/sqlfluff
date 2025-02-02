@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: a586045c6ed2abb30cdd526d4e0dfeeceb32daf854b0c6fbfcdb30eda6fed4c6
+_hash: 2a0d700bd5dc5418ed964e623a378ff5053d0abcadd537d2e9fb58905c6321c0
 file:
 - batch:
     statement:
@@ -38,11 +38,12 @@ file:
           naked_identifier: column_b
           data_type:
             data_type_identifier: VARCHAR
-            bracketed:
-              start_bracket: (
-              expression:
-                numeric_literal: '20'
-              end_bracket: )
+            bracketed_arguments:
+              bracketed:
+                start_bracket: (
+                expression:
+                  numeric_literal: '20'
+                end_bracket: )
           column_constraint_segment:
             keyword: 'NULL'
     statement_terminator: ;
@@ -81,11 +82,12 @@ file:
         - naked_identifier: column_b
         - data_type:
             data_type_identifier: VARCHAR
-            bracketed:
-              start_bracket: (
-              expression:
-                numeric_literal: '20'
-              end_bracket: )
+            bracketed_arguments:
+              bracketed:
+                start_bracket: (
+                expression:
+                  numeric_literal: '20'
+                end_bracket: )
         - column_constraint_segment:
             keyword: 'NULL'
         - column_constraint_segment:
@@ -172,8 +174,7 @@ file:
           keyword: VALUES
           bracketed:
             start_bracket: (
-            expression:
-              numeric_literal: '7'
+            numeric_literal: '7'
             end_bracket: )
     statement_terminator: ;
 - go_statement:
@@ -218,8 +219,7 @@ file:
           keyword: VALUES
           bracketed:
             start_bracket: (
-            expression:
-              numeric_literal: '10'
+            numeric_literal: '10'
             end_bracket: )
     statement_terminator: ;
 - go_statement:
@@ -297,11 +297,12 @@ file:
           naked_identifier: rec_number
           data_type:
             data_type_identifier: VARCHAR
-            bracketed:
-              start_bracket: (
-              expression:
-                numeric_literal: '36'
-              end_bracket: )
+            bracketed_arguments:
+              bracketed:
+                start_bracket: (
+                expression:
+                  numeric_literal: '36'
+                end_bracket: )
 - go_statement:
     keyword: GO
 - batch:
@@ -817,3 +818,288 @@ file:
     statement_terminator: ;
 - go_statement:
     keyword: GO
+- batch:
+    statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+        - naked_identifier: dbo
+        - dot: .
+        - naked_identifier: Products
+      - keyword: ADD
+      - computed_column_definition:
+        - naked_identifier: RetailValue
+        - keyword: AS
+        - expression:
+          - column_reference:
+              quoted_identifier: '[QtyAvailable]'
+          - binary_operator: '*'
+          - column_reference:
+              naked_identifier: UnitPrice
+          - binary_operator: '*'
+          - numeric_literal: '1.5'
+        - keyword: PERSISTED
+    statement_terminator: ;
+- go_statement:
+    keyword: GO
+- batch:
+    statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+        - naked_identifier: dbo
+        - dot: .
+        - naked_identifier: Products
+      - keyword: ADD
+      - computed_column_definition:
+        - naked_identifier: RetailValue
+        - keyword: AS
+        - bracketed:
+            start_bracket: (
+            expression:
+            - column_reference:
+                naked_identifier: QtyAvailable
+            - binary_operator: '*'
+            - column_reference:
+                quoted_identifier: '[UnitPrice]'
+            - binary_operator: '*'
+            - numeric_literal: '1.5'
+            end_bracket: )
+        - keyword: PERSISTED
+        - keyword: NOT
+        - keyword: 'NULL'
+    statement_terminator: ;
+- go_statement:
+    keyword: GO
+- batch:
+    statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+        - naked_identifier: dbo
+        - dot: .
+        - naked_identifier: Products
+      - keyword: ADD
+      - computed_column_definition:
+          naked_identifier: InventoyDate
+          keyword: AS
+          function:
+            function_name:
+              keyword: CAST
+            function_contents:
+              bracketed:
+                start_bracket: (
+                expression:
+                  column_reference:
+                    quoted_identifier: '[InventoryTs]'
+                keyword: AS
+                data_type:
+                  data_type_identifier: date
+                end_bracket: )
+    statement_terminator: ;
+- go_statement:
+    keyword: GO
+- batch:
+    statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+        - quoted_identifier: '[HangFire]'
+        - dot: .
+        - quoted_identifier: '[JobParameter]'
+      - keyword: ADD
+      - table_constraint:
+        - keyword: CONSTRAINT
+        - object_reference:
+            quoted_identifier: '[FK_HangFire_JobParameter_Job]'
+        - keyword: FOREIGN
+        - keyword: KEY
+        - bracketed:
+            start_bracket: (
+            column_reference:
+              quoted_identifier: '[JobId]'
+            end_bracket: )
+        - references_constraint_grammar:
+          - keyword: REFERENCES
+          - table_reference:
+            - quoted_identifier: '[HangFire]'
+            - dot: .
+            - quoted_identifier: '[Job]'
+          - bracketed:
+              start_bracket: (
+              column_reference:
+                quoted_identifier: '[Id]'
+              end_bracket: )
+          - keyword: 'ON'
+          - keyword: UPDATE
+          - keyword: CASCADE
+          - keyword: 'ON'
+          - keyword: DELETE
+          - keyword: CASCADE
+    statement_terminator: ;
+- go_statement:
+    keyword: GO
+- batch:
+  - statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+          naked_identifier: UserData
+      - keyword: DROP
+      - keyword: COLUMN
+      - column_reference:
+          quoted_identifier: '[StrSkill]'
+      - comma: ','
+      - column_reference:
+          quoted_identifier: '[StrItem]'
+      - comma: ','
+      - column_reference:
+          quoted_identifier: '[StrSerial]'
+  - statement_terminator: ;
+  - statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+          naked_identifier: UserData
+      - keyword: DROP
+      - keyword: COLUMN
+      - keyword: IF
+      - keyword: EXISTS
+      - column_reference:
+          naked_identifier: StrSkill
+      - comma: ','
+      - column_reference:
+          naked_identifier: StrItem
+      - comma: ','
+      - column_reference:
+          naked_identifier: StrSerial
+  - statement_terminator: ;
+  - statement:
+      create_table_statement:
+      - keyword: CREATE
+      - keyword: TABLE
+      - table_reference:
+        - quoted_identifier: '[dbo]'
+        - dot: .
+        - quoted_identifier: '[UserData]'
+      - bracketed:
+        - start_bracket: (
+        - column_definition:
+            quoted_identifier: '[strUserId]'
+            data_type:
+              data_type_identifier: '[char]'
+              bracketed_arguments:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    numeric_literal: '21'
+                  end_bracket: )
+            column_constraint_segment:
+            - keyword: NOT
+            - keyword: 'NULL'
+        - comma: ','
+        - column_definition:
+            quoted_identifier: '[strItem]'
+            data_type:
+              data_type_identifier: '[binary]'
+              bracketed_arguments:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    numeric_literal: '400'
+                  end_bracket: )
+            column_constraint_segment:
+              keyword: 'NULL'
+        - comma: ','
+        - column_definition:
+            quoted_identifier: '[strSkill]'
+            data_type:
+              data_type_identifier: '[binary]'
+              bracketed_arguments:
+                bracketed:
+                  start_bracket: (
+                  expression:
+                    numeric_literal: '400'
+                  end_bracket: )
+            column_constraint_segment:
+              keyword: 'NULL'
+        - comma: ','
+        - table_constraint:
+          - keyword: CONSTRAINT
+          - object_reference:
+              naked_identifier: PK_UserData
+          - keyword: PRIMARY
+          - keyword: KEY
+          - keyword: CLUSTERED
+          - bracketed_index_column_list_grammar:
+              bracketed:
+                start_bracket: (
+                index_column_definition:
+                  quoted_identifier: '[strUserId]'
+                  keyword: ASC
+                end_bracket: )
+        - end_bracket: )
+      - statement_terminator: ;
+  - statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+        - quoted_identifier: '[dbo]'
+        - dot: .
+        - quoted_identifier: '[UserData]'
+      - keyword: ADD
+      - column_constraint_segment:
+        - keyword: CONSTRAINT
+        - object_reference:
+            quoted_identifier: '[DF_UserData_strSkill]'
+        - keyword: DEFAULT
+        - bracketed:
+            start_bracket: (
+            numeric_literal: '0x00'
+            end_bracket: )
+      - keyword: FOR
+      - column_reference:
+          quoted_identifier: '[strSkill]'
+  - statement_terminator: ;
+- go_statement:
+    keyword: GO
+- batch:
+  - statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+          quoted_identifier: '[TestTable]'
+      - keyword: DROP
+      - period_segment:
+        - keyword: PERIOD
+        - keyword: FOR
+        - keyword: SYSTEM_TIME
+  - statement_terminator: ;
+  - statement:
+      alter_table_statement:
+      - keyword: ALTER
+      - keyword: TABLE
+      - table_reference:
+          quoted_identifier: '[TestTable]'
+      - keyword: ADD
+      - period_segment:
+        - keyword: PERIOD
+        - keyword: FOR
+        - keyword: SYSTEM_TIME
+        - bracketed:
+          - start_bracket: (
+          - column_reference:
+              naked_identifier: StartDate
+          - comma: ','
+          - column_reference:
+              naked_identifier: EndDate
+          - end_bracket: )
+  - statement_terminator: ;

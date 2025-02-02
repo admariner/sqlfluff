@@ -1,9 +1,11 @@
 """Implementation of Rule CP01."""
 
+from typing import List, Optional, Tuple
+
 import regex
-from typing import Tuple, List, Optional
+
 from sqlfluff.core.parser import BaseSegment
-from sqlfluff.core.rules import BaseRule, LintResult, LintFix, RuleContext
+from sqlfluff.core.rules import BaseRule, LintFix, LintResult, RuleContext
 from sqlfluff.core.rules.config_info import get_config_info
 from sqlfluff.core.rules.crawlers import SegmentSeekerCrawler
 
@@ -53,15 +55,13 @@ class Rule_CP01(BaseRule):
     lint_phase = "post"
     # Binary operators behave like keywords too.
     crawl_behaviour = SegmentSeekerCrawler({"keyword", "binary_operator", "date_part"})
-    # Skip boolean and null literals (which are also keywords)
-    # as they have their own rule (CP04)
-    _exclude_elements: List[Tuple[str, str]] = [
-        ("type", "null_literal"),
-        ("type", "boolean_literal"),
-        ("parenttype", "data_type"),
-        ("parenttype", "datetime_type_identifier"),
-        ("parenttype", "primitive_type"),
-    ]
+    # Skip literals (which are also keywords) as they have their own rule (CP04)
+    _exclude_types: Tuple[str, ...] = ("literal",)
+    _exclude_parent_types: Tuple[str, ...] = (
+        "data_type",
+        "datetime_type_identifier",
+        "primitive_type",
+    )
     config_keywords = ["capitalisation_policy", "ignore_words", "ignore_words_regex"]
     # Human readable target elem for description
     _description_elem = "Keywords"
@@ -74,27 +74,25 @@ class Rule_CP01(BaseRule):
         for what the possible case is.
 
         """
-        # Skip if not an element of the specified type/name
-        parent: Optional[BaseSegment] = (
-            context.parent_stack[-1] if context.parent_stack else None
-        )
-        if self.matches_target_tuples(context.segment, self._exclude_elements, parent):
+        # NOTE: Given the dialect structure we can assume the targets have a parent.
+        parent: BaseSegment = context.parent_stack[-1]
+        if context.segment.is_type(*self._exclude_types) or parent.is_type(
+            *self._exclude_parent_types
+        ):
             return [LintResult(memory=context.memory)]
 
         # Used by CP03 (that inherits from this rule)
         # If it's a qualified function_name (i.e with more than one part to
         # function_name). Then it is likely an existing user defined function (UDF)
         # which are case sensitive so ignore for this.
-        if (
-            context.parent_stack[-1].get_type() == "function_name"
-            and len(context.parent_stack[-1].segments) != 1
-        ):
+        if parent.get_type() == "function_name" and len(parent.segments) != 1:
             return [LintResult(memory=context.memory)]
 
-        return [self._handle_segment(context.segment, context.memory)]
+        return [self._handle_segment(context.segment, context)]
 
-    def _handle_segment(self, segment, memory) -> LintResult:
+    def _handle_segment(self, segment: BaseSegment, context: RuleContext) -> LintResult:
         # NOTE: this mutates the memory field.
+        memory = context.memory
         self.logger.info("_handle_segment: %s, %s", segment, segment.get_type())
         # Config type hints
         self.ignore_words_regex: str
@@ -104,6 +102,7 @@ class Rule_CP01(BaseRule):
             cap_policy = self.cap_policy
             cap_policy_opts = self.cap_policy_opts
             ignore_words_list = self.ignore_words_list
+            ignore_templated_areas = self.ignore_templated_areas
         except AttributeError:
             # First-time only, read the settings from configuration. This is
             # very slow.
@@ -111,7 +110,8 @@ class Rule_CP01(BaseRule):
                 cap_policy,
                 cap_policy_opts,
                 ignore_words_list,
-            ) = self._init_capitalisation_policy()
+                ignore_templated_areas,
+            ) = self._init_capitalisation_policy(context)
 
         # Skip if in ignore list
         if ignore_words_list and segment.raw.lower() in ignore_words_list:
@@ -123,8 +123,10 @@ class Rule_CP01(BaseRule):
         ):
             return LintResult(memory=memory)
 
-        # Skip if templated.
-        if segment.is_templated:
+        # Skip if templated.  If the user wants to ignore templated areas, we don't
+        # even want to look at them to avoid affecting flagging non-template areas
+        # that are inconsistent with the template areas.
+        if segment.is_templated and ignore_templated_areas:
             return LintResult(memory=memory)
 
         # Skip if empty.
@@ -134,16 +136,20 @@ class Rule_CP01(BaseRule):
         refuted_cases = memory.get("refuted_cases", set())
 
         # Which cases are definitely inconsistent with the segment?
+        first_letter_is_lowercase = False
         for character in segment.raw:
             if is_capitalizable(character):
                 first_letter_is_lowercase = character != character.upper()
                 break
-            # If none of the characters are letters there will be a parsing
-            # error, so not sure we need this statement
-            first_letter_is_lowercase = False
 
+        # We refute inference of camel, pascal, and snake case.
+        # snake, if not explicitly set, can be destructive to
+        # variable names, adding underscores.
+        # camel and Pascal could allow poorly linted code in,
+        # so must be explicitly chosen.
+        refuted_cases.update(["camel", "pascal", "snake"])
         if first_letter_is_lowercase:
-            refuted_cases.update(["upper", "capitalise", "pascal"])
+            refuted_cases.update(["upper", "capitalise"])
             if segment.raw != segment.raw.lower():
                 refuted_cases.update(["lower"])
         else:
@@ -152,8 +158,6 @@ class Rule_CP01(BaseRule):
                 refuted_cases.update(["upper"])
             if segment.raw != segment.raw.capitalize():
                 refuted_cases.update(["capitalise"])
-            if not segment.raw.isalnum():
-                refuted_cases.update(["pascal"])
 
         # Update the memory
         memory["refuted_cases"] = refuted_cases
@@ -216,6 +220,23 @@ class Rule_CP01(BaseRule):
                 lambda match: match.group(1) + match.group(2).upper() + match.group(3),
                 segment.raw,
             )
+        elif concrete_policy == "camel":
+            # Similar to Pascal, for Camel, we can only do a best efforts approach.
+            # This presents as us never changing case mid-string.
+            fixed_raw = regex.sub(
+                "([^a-zA-Z0-9]+|^)([a-zA-Z0-9])([a-zA-Z0-9]*)",
+                lambda match: match.group(1) + match.group(2).lower() + match.group(3),
+                segment.raw,
+            )
+        elif concrete_policy == "snake":
+            if segment.raw.isupper():
+                fixed_raw = segment.raw.lower()
+            else:
+                fixed_raw = regex.sub(
+                    r"(?<=[a-z0-9])([A-Z])|(?<=[A-Za-z])([0-9])|(?<=[0-9])([A-Za-z])",
+                    lambda match: "_" + match.group(),
+                    segment.raw,
+                ).lower()
 
         if fixed_raw == segment.raw:
             # No need to fix
@@ -228,12 +249,10 @@ class Rule_CP01(BaseRule):
             # build description based on the policy in use
             consistency = "consistently " if cap_policy == "consistent" else ""
 
-            if concrete_policy in ["upper", "lower"]:
+            if concrete_policy in ["upper", "lower", "pascal", "camel", "snake"]:
                 policy = f"{concrete_policy} case."
             elif concrete_policy == "capitalise":
                 policy = "capitalised."
-            elif concrete_policy == "pascal":
-                policy = "pascal case."
 
             # Return the fixed segment
             self.logger.debug(
@@ -247,7 +266,7 @@ class Rule_CP01(BaseRule):
                 description=f"{self._description_elem} must be {consistency}{policy}",
             )
 
-    def _get_fix(self, segment, fixed_raw):
+    def _get_fix(self, segment: BaseSegment, fixed_raw: str) -> LintFix:
         """Given a segment found to have a fix, returns a LintFix for it.
 
         May be overridden by subclasses, which is useful when the parse tree
@@ -255,7 +274,7 @@ class Rule_CP01(BaseRule):
         """
         return LintFix.replace(segment, [segment.edit(fixed_raw)])
 
-    def _init_capitalisation_policy(self):
+    def _init_capitalisation_policy(self, context: RuleContext):
         """Called first time rule is evaluated to fetch & cache the policy."""
         cap_policy_name = next(
             k for k in self.config_keywords if k.endswith("capitalisation_policy")
@@ -274,6 +293,7 @@ class Rule_CP01(BaseRule):
             )
         else:
             self.ignore_words_list = []
+        self.ignore_templated_areas = context.config.get("ignore_templated_areas")
         self.logger.debug(
             f"Selected '{cap_policy_name}': '{self.cap_policy}' from options "
             f"{self.cap_policy_opts}"
@@ -281,4 +301,5 @@ class Rule_CP01(BaseRule):
         cap_policy = self.cap_policy
         cap_policy_opts = self.cap_policy_opts
         ignore_words_list = self.ignore_words_list
-        return cap_policy, cap_policy_opts, ignore_words_list
+        ignore_templated_areas = self.ignore_templated_areas
+        return cap_policy, cap_policy_opts, ignore_words_list, ignore_templated_areas

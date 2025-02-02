@@ -1,7 +1,7 @@
 """Define FunctionalContext class."""
 
-from sqlfluff.utils.functional import Segments
 from sqlfluff.core.rules import RuleContext
+from sqlfluff.utils.functional.segments import Segments
 
 
 class FunctionalContext:
@@ -46,7 +46,7 @@ class FunctionalContext:
         )
 
     @property
-    def raw_segments(self):  # pragma: no cover
+    def raw_segments(self) -> Segments:  # pragma: no cover
         """Returns a Segments object for all the raw segments in the file."""
         file_segment = self.context.parent_stack[0]
         return Segments(

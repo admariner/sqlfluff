@@ -1,28 +1,27 @@
 """Dataclasses for reflow work."""
 
-from itertools import chain
 import logging
-from typing import Iterator, List, Optional, Sequence, Tuple, cast, Type
-from sqlfluff.core.config import FluffConfig
+from itertools import chain
+from typing import Iterator, List, Literal, Optional, Sequence, Tuple, Type, cast
 
+from sqlfluff.core.config import FluffConfig
 from sqlfluff.core.parser import BaseSegment, RawSegment
-from sqlfluff.core.rules.base import LintFix, LintResult
+from sqlfluff.core.rules import LintFix, LintResult
 from sqlfluff.utils.reflow.config import ReflowConfig
 from sqlfluff.utils.reflow.depthmap import DepthMap
-
 from sqlfluff.utils.reflow.elements import (
     ReflowBlock,
     ReflowPoint,
     ReflowSequenceType,
     get_consumed_whitespace,
 )
-from sqlfluff.utils.reflow.rebreak import rebreak_sequence
+from sqlfluff.utils.reflow.helpers import fixes_from_results
+from sqlfluff.utils.reflow.rebreak import rebreak_keywords_sequence, rebreak_sequence
 from sqlfluff.utils.reflow.reindent import (
-    lint_indent_points,
     construct_single_indent,
+    lint_indent_points,
     lint_line_length,
 )
-from sqlfluff.utils.reflow.helpers import fixes_from_results
 
 # We're in the utils module, but users will expect reflow
 # logs to appear in the context of rules. Hence it's a subset
@@ -103,8 +102,11 @@ class ReflowSequence:
         return "".join(elem.raw for elem in self.elements)
 
     @staticmethod
-    def _validate_reflow_sequence(elements: ReflowSequenceType):
-        assert elements, "ReflowSequence has empty elements."
+    def _validate_reflow_sequence(elements: ReflowSequenceType) -> None:
+        # An empty set of elements _is_ allowed as an edge case.
+        if not elements:
+            # Return early if so
+            return None
         # Check odds and evens
         OddType = elements[0].__class__
         EvenType = ReflowPoint if OddType is ReflowBlock else ReflowBlock
@@ -117,6 +119,7 @@ class ReflowSequence:
             assert all(
                 isinstance(elem, EvenType) for elem in elements[1::2]
             ), f"Not all even elements are {EvenType.__name__}"
+            return None
         except AssertionError as err:  # pragma: no cover
             for elem in elements:
                 reflow_logger.error("   - %s", elem)
@@ -153,7 +156,7 @@ class ReflowSequence:
             # Add the block, with config info.
             elem_buff.append(
                 ReflowBlock.from_config(
-                    segments=[seg],
+                    segments=(seg,),
                     config=reflow_config,
                     depth_info=depth_map.get_depth_info(seg),
                 )
@@ -350,7 +353,7 @@ class ReflowSequence:
         # the target.
         self.depth_map.copy_depth_info(target, insertion)
         new_block = ReflowBlock.from_config(
-            segments=[insertion],
+            segments=(insertion,),
             config=self.reflow_config,
             depth_info=self.depth_map.get_depth_info(target),
         )
@@ -500,8 +503,8 @@ class ReflowSequence:
             # If filter has been set, optionally unset the returned values.
             if (
                 filter == "inline"
+                # NOTE: We test on the NEW point.
                 if (
-                    # NOTE: We test on the NEW point.
                     any(seg.is_type("newline") for seg in new_point.segments)
                     # Or if it's followed by the end of file
                     or (post and "end_of_file" in post.class_types)
@@ -515,9 +518,6 @@ class ReflowSequence:
                 new_point = point
             # Otherwise apply the new fixes
             else:
-                reflow_logger.debug(
-                    "    Filter %r allows fixes for point: %s", filter, new_lint_results
-                )
                 lint_results = new_lint_results
 
             if pre and (not new_elements or new_elements[-1] != pre):
@@ -533,7 +533,9 @@ class ReflowSequence:
             lint_results=lint_results,
         )
 
-    def rebreak(self) -> "ReflowSequence":
+    def rebreak(
+        self, rebreak_type: Literal["lines", "keywords"] = "lines"
+    ) -> "ReflowSequence":
         """Returns a new :obj:`ReflowSequence` corrected line breaks.
 
         This intentionally **does not handle indentation**,
@@ -552,7 +554,16 @@ class ReflowSequence:
             )
 
         # Delegate to the rebreak algorithm
-        elem_buff, lint_results = rebreak_sequence(self.elements, self.root_segment)
+        if rebreak_type == "lines":
+            elem_buff, lint_results = rebreak_sequence(self.elements, self.root_segment)
+        elif rebreak_type == "keywords":
+            elem_buff, lint_results = rebreak_keywords_sequence(
+                self.elements, self.root_segment
+            )
+        else:  # pragma: no cover
+            raise NotImplementedError(
+                f"Rebreak type of `{rebreak_type}` is not supported."
+            )
 
         return ReflowSequence(
             elements=elem_buff,
@@ -562,7 +573,7 @@ class ReflowSequence:
             lint_results=lint_results,
         )
 
-    def reindent(self):
+    def reindent(self) -> "ReflowSequence":
         """Reindent lines within a sequence."""
         if self.lint_results:
             raise NotImplementedError(  # pragma: no cover
@@ -580,6 +591,7 @@ class ReflowSequence:
             single_indent=single_indent,
             skip_indentation_in=self.reflow_config.skip_indentation_in,
             allow_implicit_indents=self.reflow_config.allow_implicit_indents,
+            ignore_comment_lines=self.reflow_config.ignore_comment_lines,
         )
 
         return ReflowSequence(
@@ -590,7 +602,7 @@ class ReflowSequence:
             lint_results=indent_results,
         )
 
-    def break_long_lines(self):
+    def break_long_lines(self) -> "ReflowSequence":
         """Rebreak any remaining long lines in a sequence.
 
         This assumes that reindent() has already been applied.
@@ -613,6 +625,7 @@ class ReflowSequence:
             single_indent=single_indent,
             line_length_limit=self.reflow_config.max_line_length,
             allow_implicit_indents=self.reflow_config.allow_implicit_indents,
+            trailing_comments=self.reflow_config.trailing_comments,
         )
 
         return ReflowSequence(

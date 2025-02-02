@@ -1,6 +1,7 @@
 """A list of all Athena keywords.
 
-Presto List: https://prestodb.io/docs/0.217/language/reserved.html
+Presto List (for Athena v2): https://prestodb.io/docs/0.217/language/reserved.html
+Trino List (for Athena v3): https://trino.io/docs/current/language/reserved.html
 Hive List: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+DDL
 """
 
@@ -162,6 +163,7 @@ athena_unreserved_keywords = [
     "COMPACT",
     "COMPACTIONS",
     "COMPRESSION",
+    "COMPRESSION_LEVEL",
     "COMPUTE",
     "CONCATENATE",
     "CONTINUE",
@@ -238,6 +240,10 @@ athena_unreserved_keywords = [
     "NULLS",
     "OFFLINE",
     "OFFSET",
+    "OPTIMIZE_REWRITE_MIN_DATA_FILE_SIZE_BYTES",
+    "OPTIMIZE_REWRITE_MAX_DATA_FILE_SIZE_BYTES",
+    "OPTIMIZE_REWRITE_DATA_FILE_THRESHOLD",
+    "OPTIMIZE_REWRITE_DELETE_FILE_THRESHOLD",
     "OPTION",
     "ORC_COMPRESSION",
     "OUTPUTDRIVER",
@@ -320,7 +326,7 @@ athena_unreserved_keywords = [
     "USER",
     "UTC",
     "UTCTIMESTAMP",
-    "VACUUM_MAX_SNAPSHOT_AGE_MS",
+    "VACUUM_MAX_SNAPSHOT_AGE_SECONDS",
     "VACUUM_MIN_SNAPSHOTS_TO_KEEP",
     "VALIDATE",
     "VALUE_TYPE",

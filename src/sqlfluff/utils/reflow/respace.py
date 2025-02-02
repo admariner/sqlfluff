@@ -1,16 +1,18 @@
 """Static methods to support ReflowPoint.respace_point()."""
 
-
 import logging
-from typing import List, Optional, Tuple, cast, TYPE_CHECKING
+from collections import defaultdict
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
-from sqlfluff.core.parser import BaseSegment, RawSegment, PositionMarker
-from sqlfluff.core.parser.segments.raw import WhitespaceSegment
-from sqlfluff.core.rules.base import LintFix, LintResult
 from sqlfluff.core.errors import SQLFluffUserError
-
+from sqlfluff.core.parser import (
+    BaseSegment,
+    PositionMarker,
+    RawSegment,
+    WhitespaceSegment,
+)
+from sqlfluff.core.rules import LintFix, LintResult
 from sqlfluff.utils.reflow.helpers import pretty_segment_name
-
 
 if TYPE_CHECKING:  # pragma: no cover
     from sqlfluff.utils.reflow.elements import ReflowBlock
@@ -22,7 +24,7 @@ if TYPE_CHECKING:  # pragma: no cover
 reflow_logger = logging.getLogger("sqlfluff.rules.reflow")
 
 
-def _unpack_constraint(constraint: str, strip_newlines: bool):
+def _unpack_constraint(constraint: str, strip_newlines: bool) -> Tuple[str, bool]:
     """Unpack a spacing constraint.
 
     Used as a helper function in `determine_constraints`.
@@ -82,6 +84,9 @@ def determine_constraints(
             within_spacing, strip_newlines = _unpack_constraint(
                 within_constraint, strip_newlines
             )
+        # Prohibit stripping newlines after comment segments
+        if any(seg.is_type("comment") for seg in prev_block.segments):
+            strip_newlines = False
 
     # If segments are expected to be touch within. Then modify
     # constraints accordingly.
@@ -91,6 +96,9 @@ def determine_constraints(
             pre_constraint = "touch"
         if post_constraint != "any":
             post_constraint = "touch"
+    elif within_spacing == "any":
+        pre_constraint = "any"
+        post_constraint = "any"
     elif within_spacing == "single":
         pass
     elif within_spacing:  # pragma: no cover
@@ -113,19 +121,18 @@ def process_spacing(
 
     # Loop through the existing segments looking for spacing.
     for seg in segment_buffer:
-        # If it has a position marker, but it's not literal, then
-        # it's a templated element and so we shouldn't consider it
-        # here.
-        if seg.pos_marker and not seg.pos_marker.is_literal():
-            continue
-
         # If it's whitespace, store it.
-        elif seg.is_type("whitespace"):
+        if seg.is_type("whitespace"):
             last_whitespace.append(seg)
 
         # If it's a newline, react accordingly.
         # NOTE: This should only trigger on literal newlines.
         elif seg.is_type("newline", "end_of_file"):
+            if seg.pos_marker and not seg.pos_marker.is_literal():
+                last_whitespace = []
+                reflow_logger.debug("    Skipping templated newline: %s", seg)
+                continue
+
             # Are we stripping newlines?
             if strip_newlines and seg.is_type("newline"):
                 reflow_logger.debug("    Stripping newline: %s", seg)
@@ -199,13 +206,14 @@ def _determine_aligned_inline_spacing(
 
     # Edge case: if next_seg has no position, we should use the position
     # of the whitespace for searching.
-    for ps in root_segment.path_to(next_seg if next_seg.pos_marker else whitespace_seg)[
-        ::-1
-    ]:
-        if ps.segment.is_type(align_within):
-            parent_segment = ps.segment
-        if ps.segment.is_type(align_scope):
-            break
+    if align_within:
+        for ps in root_segment.path_to(
+            next_seg if next_seg.pos_marker else whitespace_seg
+        )[::-1]:
+            if ps.segment.is_type(align_within):
+                parent_segment = ps.segment
+            if align_scope and ps.segment.is_type(align_scope):
+                break
 
     if not parent_segment:
         reflow_logger.debug("    No Parent found for alignment case. Treat as single.")
@@ -216,7 +224,7 @@ def _determine_aligned_inline_spacing(
     siblings = []
     for sibling in parent_segment.recursive_crawl(segment_type):
         # Purge any siblings with a boundary between them
-        if not any(
+        if not align_scope or not any(
             ps.segment.is_type(align_scope) for ps in parent_segment.path_to(sibling)
         ):
             siblings.append(sibling)
@@ -225,6 +233,44 @@ def _determine_aligned_inline_spacing(
                 "    Purging a sibling because they're blocked " "by a boundary: %s",
                 sibling,
             )
+
+    # If the segment we're aligning, has position. Use that position.
+    # If it doesn't, then use the provided one. We can't do sibling analysis without it.
+    if next_seg.pos_marker:
+        next_pos = next_seg.pos_marker
+
+    # Purge any siblings which are either on the same line or on another line and
+    # have another index
+    siblings_by_line: Dict[int, List[BaseSegment]] = defaultdict(list)
+    for sibling in siblings:
+        _pos = sibling.pos_marker
+        assert _pos
+        siblings_by_line[_pos.working_line_no].append(sibling)
+
+    # Sort all segments by position to easily access index information
+    for line_siblings in siblings_by_line.values():
+        line_siblings.sort(
+            key=lambda s: cast(PositionMarker, s.pos_marker).working_line_pos
+        )
+
+    target_index = next(
+        idx
+        for idx, segment in enumerate(siblings_by_line[next_pos.working_line_no])
+        if (
+            cast(PositionMarker, segment.pos_marker).working_line_pos
+            == next_pos.working_line_pos
+        )
+    )
+
+    # Now that we know the target index, we can extract the relevant segment from
+    # all lines
+    siblings = [
+        segment
+        for segments in siblings_by_line.values()
+        for segment in (
+            [segments[target_index]] if target_index < len(segments) else []
+        )
+    ]
 
     # If there's only one sibling, we have nothing to compare to. Default to a single
     # space.
@@ -236,31 +282,17 @@ def _determine_aligned_inline_spacing(
         )
         return desired_space
 
-    # If the segment we're aligning, has position. Use that position.
-    # If it doesn't, then use the provided one. We can't do sibling analysis without it.
-    if next_seg.pos_marker:
-        next_pos = next_seg.pos_marker
-
-    # Is the current indent the only one on the line?
-    if any(
-        # Same line
-        sibling.pos_marker.working_line_no == next_pos.working_line_no
-        # And not same position (i.e. not self)
-        and sibling.pos_marker.working_line_pos != next_pos.working_line_pos
-        for sibling in siblings
-    ):
-        reflow_logger.debug("    Found sibling on same line. Treat as single")
-        return " "
-
     # Work out the current spacing before each.
-    last_code = None
+    last_code: Optional[RawSegment] = None
     max_desired_line_pos = 0
     for seg in parent_segment.raw_segments:
         for sibling in siblings:
             # NOTE: We're asserting that there must have been
             # a last_code. Otherwise this won't work.
             if (
-                seg.pos_marker.working_loc == sibling.pos_marker.working_loc
+                seg.pos_marker
+                and sibling.pos_marker
+                and seg.pos_marker.working_loc == sibling.pos_marker.working_loc
                 and last_code
             ):
                 loc = last_code.pos_marker.working_loc_after(last_code.raw)

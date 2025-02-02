@@ -3,7 +3,7 @@
 # computed by SQLFluff when running the tests. Please run
 # `python test/generate_parse_fixture_yml.py`  to generate them after adding or
 # altering SQL files.
-_hash: 97b72bf4757d9b6121f40a94df1136f6d551faa919fd929adbc68d0ef932335b
+_hash: 12d7e9e7e03ef1a35e91fa4258be722ef43fb9dd4d7c1e251e1909a0fb24b499
 file:
 - statement:
     alter_table_statement:
@@ -34,11 +34,11 @@ file:
             naked_identifier: column_name
             data_type:
               data_type_identifier: NUMBER
-              bracketed:
-                start_bracket: (
-                expression:
+              bracketed_arguments:
+                bracketed:
+                  start_bracket: (
                   numeric_literal: '18'
-                end_bracket: )
+                  end_bracket: )
           end_bracket: )
 - statement_terminator: ;
 - statement:
@@ -53,11 +53,11 @@ file:
           naked_identifier: column_name
           data_type:
             data_type_identifier: NUMBER
-            bracketed:
-              start_bracket: (
-              expression:
+            bracketed_arguments:
+              bracketed:
+                start_bracket: (
                 numeric_literal: '18'
-              end_bracket: )
+                end_bracket: )
 - statement_terminator: ;
 - statement:
     alter_table_statement:
@@ -127,4 +127,60 @@ file:
       - keyword: CONSTRAINT
       - object_reference:
           naked_identifier: constraint_name
+- statement_terminator: ;
+- statement:
+    alter_table_statement:
+    - keyword: ALTER
+    - keyword: TABLE
+    - table_reference:
+        naked_identifier: table_name
+    - alter_table_column_clauses:
+        keyword: MODIFY
+        bracketed:
+          start_bracket: (
+          column_definition:
+            naked_identifier: column_name
+            column_constraint_segment:
+            - keyword: NOT
+            - keyword: 'NULL'
+            keyword: ENABLE
+          end_bracket: )
+- statement_terminator: ;
+- statement:
+    alter_table_statement:
+    - keyword: ALTER
+    - keyword: TABLE
+    - table_reference:
+        naked_identifier: table_name
+    - alter_table_column_clauses:
+        keyword: MODIFY
+        bracketed:
+          start_bracket: (
+          column_definition:
+            naked_identifier: column_name
+            column_constraint_segment:
+              keyword: DEFAULT
+              numeric_literal: '10'
+          end_bracket: )
+- statement_terminator: ;
+- statement:
+    alter_table_statement:
+    - keyword: ALTER
+    - keyword: TABLE
+    - table_reference:
+        naked_identifier: table_name
+    - alter_table_column_clauses:
+        keyword: MODIFY
+        bracketed:
+          start_bracket: (
+          column_definition:
+          - naked_identifier: column_name
+          - column_constraint_segment:
+              keyword: DEFAULT
+              numeric_literal: '10'
+          - column_constraint_segment:
+            - keyword: NOT
+            - keyword: 'NULL'
+          - keyword: ENABLE
+          end_bracket: )
 - statement_terminator: ;
