@@ -5322,6 +5322,11 @@ class AlterTableStatementSegment(BaseSegment):
                 OneOf("ALL", Ref("ObjectReferenceSegment")),
             ),
             Sequence(
+                OneOf("ENABLE", "DISABLE"),
+                "TRIGGER",
+                OneOf("ALL", Delimited(Ref("TriggerReferenceSegment"))),
+            ),
+            Sequence(
                 "DROP",
                 Delimited(
                     Sequence(
