@@ -481,18 +481,20 @@ pub struct PyParser {
     max_parser_iterations: usize,
     parser_warn_threshold: usize,
     max_parse_depth: usize,
+    max_parse_nodes: usize,
 }
 
 #[pymethods]
 impl PyParser {
     #[new]
-    #[pyo3(signature = (dialect=None, indent_config=None, max_parser_iterations=None, parser_warn_threshold=None, max_parse_depth=0))]
+    #[pyo3(signature = (dialect=None, indent_config=None, max_parser_iterations=None, parser_warn_threshold=None, max_parse_depth=0, max_parse_nodes=0))]
     pub fn new(
         dialect: Option<&str>,
         indent_config: Option<HashMap<String, bool>>,
         max_parser_iterations: Option<usize>,
         parser_warn_threshold: Option<usize>,
         max_parse_depth: usize,
+        max_parse_nodes: usize,
     ) -> PyResult<Self> {
         let dialect = dialect
             .and_then(|d| Dialect::from_str(d).ok())
@@ -518,6 +520,7 @@ impl PyParser {
             max_parser_iterations: max_parser_iterations.unwrap_or(3_000_000),
             parser_warn_threshold: parser_warn_threshold.unwrap_or(2_000_000),
             max_parse_depth,
+            max_parse_nodes,
         })
     }
 
@@ -548,7 +551,8 @@ impl PyParser {
             self.indent_config.clone(),
             self.max_parse_depth,
         )
-        .with_parser_limits(self.max_parser_iterations, self.parser_warn_threshold);
+        .with_parser_limits(self.max_parser_iterations, self.parser_warn_threshold)
+        .with_node_limit(self.max_parse_nodes);
 
         // Parse and get the MatchResult directly
         let match_result = parser.call_rule_as_root().map_err(parse_error_to_pyerr)?;
@@ -588,7 +592,8 @@ impl PyParser {
             self.indent_config.clone(),
             self.max_parse_depth,
         )
-        .with_parser_limits(self.max_parser_iterations, self.parser_warn_threshold);
+        .with_parser_limits(self.max_parser_iterations, self.parser_warn_threshold)
+        .with_node_limit(self.max_parse_nodes);
 
         // Parse and get the MatchResult directly
         let match_result = parser
@@ -647,7 +652,8 @@ impl PyParser {
             self.indent_config.clone(),
             self.max_parse_depth,
         )
-        .with_parser_limits(self.max_parser_iterations, self.parser_warn_threshold);
+        .with_parser_limits(self.max_parser_iterations, self.parser_warn_threshold)
+        .with_node_limit(self.max_parse_nodes);
 
         // Track grammar calls using cache misses as a proxy
         // Each unique (grammar_id, pos) pair in the cache represents one grammar call
