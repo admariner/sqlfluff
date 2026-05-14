@@ -10,6 +10,32 @@ Note: Changes are now automatically tracked in [GitHub](https://github.com/sqlfl
 -->
 <!--Start Of Releases (DO NOT DELETE THIS LINE)-->
 
+## [4.2.1] - 2026-05-14
+
+## Highlights
+
+This is a bugfix release primarily to change the configuration of how
+rust wheels are distributed for sqlfluffrs. From this release onwards,
+rust wheels use ABI3 so that a single wheel can be reused across multiple
+python versions, and the number of platforms which we distribute pre-compiled
+wheels for has been reduced. This is to ensure we remain with the storage
+limits set by pypi.
+
+In addition to this we see two TSQL fixes, including the first contribution
+by [@simondennis9](https://github.com/simondennis9) to the project. Thanks
+for your contributions! 🏆
+
+## What’s Changed
+
+* build(deps): bump axios from 1.13.6 to 1.16.1 in /docsv [#7846](https://github.com/sqlfluff/sqlfluff/pull/7846) [@[dependabot[bot]](https://github.com/apps/dependabot)](https://github.com/[dependabot[bot]](https://github.com/apps/dependabot))
+* TSQL: enable parameters in CONTAINSTABLE [#7843](https://github.com/sqlfluff/sqlfluff/pull/7843) [@peterbud](https://github.com/peterbud)
+* Cut back the rust wheels distributed and use ABI3 [#7844](https://github.com/sqlfluff/sqlfluff/pull/7844) [@alanmcruickshank](https://github.com/alanmcruickshank)
+* fix(tsql): RuntimeError parsing grant alter/create statements [#7835](https://github.com/sqlfluff/sqlfluff/pull/7835) [@simondennis9](https://github.com/simondennis9)
+
+## New Contributors
+
+* [@simondennis9](https://github.com/simondennis9) made their first contribution in [#7835](https://github.com/sqlfluff/sqlfluff/pull/7835)
+
 ## [4.2.0] - 2026-05-13
 
 ## Highlights
