@@ -7921,8 +7921,7 @@ class GrantStatementSegment(BaseSegment):
             Ref("PermissionsSegment"),
             Sequence("ALL", Ref.keyword("PRIVILEGES", optional=True)),
         ),
-        "ON",
-        Ref("SecurableSegment"),
+        Sequence("ON", Ref("SecurableSegment"), optional=True),
         "TO",
         Delimited(Ref("RoleReferenceSegment"), "PUBLIC"),
         Sequence(
@@ -7953,8 +7952,7 @@ class DenyStatementSegment(BaseSegment):
             Ref("PermissionsSegment"),
             Sequence("ALL", Ref.keyword("PRIVILEGES", optional=True)),
         ),
-        "ON",
-        Ref("SecurableSegment"),
+        Sequence("ON", Ref("SecurableSegment"), optional=True),
         "TO",
         Delimited(Ref("RoleReferenceSegment"), "PUBLIC"),
         Sequence(
@@ -7985,8 +7983,7 @@ class RevokeStatementSegment(BaseSegment):
             Ref("PermissionsSegment"),
             Sequence("ALL", Ref.keyword("PRIVILEGES", optional=True)),
         ),
-        "ON",
-        Ref("SecurableSegment"),
+        Sequence("ON", Ref("SecurableSegment"), optional=True),
         OneOf("TO", "FROM"),
         Delimited(Ref("RoleReferenceSegment"), "PUBLIC"),
         Sequence(
